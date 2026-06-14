@@ -1,0 +1,19 @@
+{
+  "name": "legion-sentry",
+  "version": "0.1.0-dev",
+  "private": true,
+  "description": "Legion Sentry G1 — BAS Router / BACnet Gateway / Field Diagnostics Appliance",
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm run dev --prefix backend\" \"npm run dev --prefix frontend\"",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "start": "npm run start --prefix backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "network": {
+    "ethernet": {
+      "interface": "eth0",
+      "dhcpEnabled": true,
+      "staticIp": "192.168.1.50",
+      "subnetMask": "255.255.255.0",
+      "gateway": "192.168.1.1",
+      "dns": ["192.168.1.1", "8.8.8.8"]
+    },
+    "wifi": {
+      "enabled": false,
+      "ssid": "",
+      "ipAddress": "",
+      "signalStrength": 0
+    },
+    "hostname": "sentry-dev-1"
+  },
+  "bacnet": {
+    "ip": {
+      "enabled": true,
+      "deviceInstance": 100001,
+      "udpPort": 47808,
+      "networkNumber": 1,
+      "bbmdEnabled": false,
+      "foreignDeviceRegistrationEnabled": false
+    },
+    "mstp": {
+      "enabled": true,
+      "serialPort": "/dev/ttyAMA0",
+      "macAddress": 5,
+      "baudRate": 38400,
+      "maxMaster": 127,
+      "maxInfoFrames": 1,
+      "networkNumber": 2
+    }
+  },
+  "modbus": {
+    "tcp": {
+      "enabled": true,
+      "port": 502,
+      "unitId": 1,
+      "timeout": 3000,
+      "pollInterval": 1000
+    },
+    "rtu": {
+      "enabled": true,
+      "serialPort": "/dev/ttyAMA0",
+      "baudRate": 9600,
+      "parity": "none",
+      "dataBits": 8,
+      "stopBits": 1,
+      "unitId": 1
+    }
+  },
+  "mqtt": {
+    "enabled": false,
+    "brokerUrl": "mqtt://broker.local",
+    "port": 1883,
+    "username": "",
+    "password": "",
+    "tlsEnabled": false,
+    "topics": {
+      "base": "legion/sentry/sentry-dev-1",
+      "telemetry": "legion/sentry/sentry-dev-1/telemetry",
+      "events": "legion/sentry/sentry-dev-1/events",
+      "commands": "legion/sentry/sentry-dev-1/commands"
+    }
+  }
+}

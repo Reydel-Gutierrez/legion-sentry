@@ -4,7 +4,15 @@ import { api } from '../api/client';
 import PanelCard from '../components/common/PanelCard';
 import PageHeader from '../components/common/PageHeader';
 
-const FILTERS = ['all', 'system', 'network', 'bacnet', 'modbus', 'mqtt', 'fault'];
+const FILTERS = [
+  { id: 'all', label: 'All' },
+  { id: 'system', label: 'System' },
+  { id: 'network', label: 'Network' },
+  { id: 'bacnet', label: 'BACnet' },
+  { id: 'modbus', label: 'Modbus' },
+  { id: 'mqtt', label: 'MQTT' },
+  { id: 'fault', label: 'Fault' },
+];
 
 function formatTimestamp(iso) {
   return new Date(iso).toLocaleString();
@@ -32,17 +40,17 @@ export default function LogsPage() {
 
   return (
     <>
-      <PageHeader title="Logs" subtitle="Service and system event log" />
+      <PageHeader title="Logs" subtitle="System, network, and protocol event log" />
 
       <div className="filter-bar">
         {FILTERS.map((f) => (
           <button
-            key={f}
+            key={f.id}
             type="button"
-            className={`filter-btn${filter === f ? ' active' : ''}`}
-            onClick={() => setFilter(f)}
+            className={`filter-btn${filter === f.id ? ' active' : ''}`}
+            onClick={() => setFilter(f.id)}
           >
-            {f}
+            {f.label}
           </button>
         ))}
       </div>
@@ -79,10 +87,10 @@ export default function LogsPage() {
           Refresh
         </button>
         <button type="button" className="btn btn-sentry-secondary" onClick={handleClear} disabled={loading}>
-          Clear Logs
+          Clear
         </button>
-        <button type="button" className="btn btn-sentry-secondary" disabled title="Placeholder — download not implemented">
-          Download Logs
+        <button type="button" className="btn btn-sentry-secondary" disabled title="Download not yet implemented">
+          Download
         </button>
       </div>
     </>

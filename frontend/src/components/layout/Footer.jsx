@@ -4,7 +4,7 @@ export default function Footer({ topBar }) {
       <div className="footer-left">
         <span>© Legion Controls</span>
         <span className="footer-sep">·</span>
-        <span className="footer-muted">Sentry Appliance UI</span>
+        <span className="footer-muted">Sentry G1</span>
       </div>
       <div className="footer-center">
         <span className="footer-muted">Firmware</span>
@@ -18,10 +18,7 @@ export default function Footer({ topBar }) {
         )}
       </div>
       <div className="footer-right">
-        <span className="footer-mode footer-mode--active">Router</span>
-        <span className="footer-mode footer-mode--disabled" title="Engineering tools not available on appliance">
-          Engineering
-        </span>
+        <span className="footer-muted">LCG1DEV10026</span>
       </div>
     </footer>
   );

@@ -2,7 +2,7 @@ const LOG_LEVELS = ['info', 'warn', 'error', 'debug'];
 const SERVICES = ['system', 'network', 'bacnet', 'modbus', 'mqtt', 'fault'];
 
 let logs = [
-  { id: 1, timestamp: new Date(Date.now() - 3600000).toISOString(), level: 'info', service: 'system', message: 'Legion Sentry service started (simulated mode)' },
+  { id: 1, timestamp: new Date(Date.now() - 3600000).toISOString(), level: 'info', service: 'system', message: 'Legion Sentry G1 started' },
   { id: 2, timestamp: new Date(Date.now() - 3500000).toISOString(), level: 'info', service: 'network', message: 'eth0 link up — 1000 Mbps full duplex' },
   { id: 3, timestamp: new Date(Date.now() - 3400000).toISOString(), level: 'info', service: 'bacnet', message: 'BACnet/IP bound to UDP port 47808' },
   { id: 4, timestamp: new Date(Date.now() - 3300000).toISOString(), level: 'info', service: 'bacnet', message: 'BACnet MS/TP started on /dev/ttyAMA0 @ 38400 baud' },
@@ -36,7 +36,7 @@ function getLogs(filter = 'all') {
 
 function clearLogs() {
   logs = [];
-  addLog({ level: 'info', service: 'system', message: 'Log buffer cleared by operator' });
+  addLog({ level: 'info', service: 'system', message: 'Log buffer cleared' });
   return { success: true, count: logs.length };
 }
 

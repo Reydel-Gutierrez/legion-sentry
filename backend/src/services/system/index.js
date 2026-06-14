@@ -1,5 +1,7 @@
 const os = require('os');
 const { DEVICE } = require('../../config');
+const deviceService = require('../devices');
+const logsService = require('../logs');
 
 const bootTime = Date.now();
 
@@ -36,7 +38,6 @@ function getSystemStatus() {
       firmwareVersion: DEVICE.firmwareVersion,
       productCode: DEVICE.productCode,
       deviceId: DEVICE.deviceId,
-      mode: DEVICE.mode,
     },
     system: {
       cpuUsage: randomInRange(8, 28),
@@ -77,13 +78,13 @@ function getSystemStatus() {
       bacnetMstp: { name: 'BACnet MS/TP', status: 'running', port: '/dev/ttyAMA0' },
       modbusTcp: { name: 'Modbus TCP', status: 'running', port: 502 },
       modbusRtu: { name: 'Modbus RTU', status: 'running', port: '/dev/ttyAMA0' },
-      mqtt: { name: 'MQTT Client', status: 'stopped', port: 1883 },
-      diagnostics: { name: 'Diagnostics', status: 'running', port: null },
+      mqtt: { name: 'MQTT', status: 'stopped', port: 1883 },
     },
+    devices: deviceService.getDashboardSummary(),
+    recentEvents: logsService.getLogs('all').slice(0, 6),
     topBar: {
       productName: 'Sentry G1',
       productCode: DEVICE.productCode,
-      badge: 'DEV-1 / Simulated',
       ip: eth0?.address || '192.168.1.50',
       uptime: formatUptime(uptimeMs),
     },
@@ -93,20 +94,26 @@ function getSystemStatus() {
 function getHealth() {
   return {
     status: 'ok',
-    mode: DEVICE.mode,
     timestamp: new Date().toISOString(),
     version: DEVICE.firmwareVersion,
   };
 }
 
 function getSystemInfo() {
+  const interfaces = os.networkInterfaces();
+  const eth0 = Object.values(interfaces)
+    .flat()
+    .find((iface) => iface && !iface.internal && iface.family === 'IPv4');
+
   return {
     os: `${os.type()} ${os.release()}`,
     nodeVersion: process.version,
+    firmwareVersion: DEVICE.firmwareVersion,
     appVersion: DEVICE.firmwareVersion,
     hardwareProfile: DEVICE.hardwareProfile,
     architecture: os.arch(),
     hostname: DEVICE.hostname,
+    ip: eth0?.address || '192.168.1.50',
     productCode: DEVICE.productCode,
     diskUsage: randomInRange(18, 36),
     memoryTotalMb: Math.round(os.totalmem() / 1024 / 1024),

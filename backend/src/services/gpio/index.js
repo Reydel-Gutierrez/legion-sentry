@@ -1,4 +1,3 @@
-const bacnetService = require('../bacnet');
 const modbusService = require('../modbus');
 
 function getGpioDiagnostics() {
@@ -14,7 +13,6 @@ function getGpioDiagnostics() {
 }
 
 function getDiagnosticsSummary() {
-  const bacnet = bacnetService.getBacnetStatus();
   const modbus = modbusService.getModbusStatus();
 
   return {
@@ -24,11 +22,13 @@ function getDiagnosticsSummary() {
       gateway: { target: '192.168.1.1', success: true, latencyMs: 2 },
     },
     bacnet: {
-      ipDevicesDiscovered: bacnet.discoveredDevices.length,
-      mstpBusStatus: bacnet.mstp.busState,
-      rxCount: 18492,
-      txCount: 12044,
-      errorCount: 3,
+      ipRxPackets: 12847,
+      ipTxPackets: 9234,
+      mstpRxPackets: 5645,
+      mstpTxPackets: 4810,
+      timeouts: 7,
+      retries: 14,
+      crcErrors: 2,
       lastError: 'NPDU timeout on MS/TP token poll (recovered)',
     },
     modbus: {

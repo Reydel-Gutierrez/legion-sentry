@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Col, Form, Row, Table } from 'react-bootstrap';
+import { Col, Form, Row } from 'react-bootstrap';
 import { api } from '../api/client';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
@@ -10,14 +10,16 @@ const BAUD_RATES = [9600, 19200, 38400, 76800, 115200];
 export default function BacnetPage() {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
-  const [discovered, setDiscovered] = useState([]);
   const [message, setMessage] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const load = () => api.getBacnetStatus().then((status) => {
     setData(status);
-    setForm({ ip: { ...status.ip }, mstp: { ...status.mstp } });
-    setDiscovered(status.discoveredDevices || []);
+    setForm({
+      ip: { ...status.ip },
+      mstp: { ...status.mstp },
+      routing: { ...status.routing },
+    });
   });
 
   useEffect(() => { load().catch(console.error); }, []);
@@ -28,6 +30,10 @@ export default function BacnetPage() {
 
   const updateMstp = (field, value) => {
     setForm((prev) => ({ ...prev, mstp: { ...prev.mstp, [field]: value } }));
+  };
+
+  const updateRouting = (field, value) => {
+    setForm((prev) => ({ ...prev, routing: { ...prev.routing, [field]: value } }));
   };
 
   const handleSave = async () => {
@@ -44,25 +50,11 @@ export default function BacnetPage() {
     }
   };
 
-  const handleDiscover = async () => {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const result = await api.discoverBacnet();
-      setDiscovered(result.devices);
-      setMessage({ type: 'success', text: `Discovery complete — ${result.devices.length} devices found in ${result.durationMs}ms.` });
-    } catch (err) {
-      setMessage({ type: 'error', text: err.message });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   if (!form || !data) return <div className="loading-state">Loading BACnet configuration…</div>;
 
   return (
     <>
-      <PageHeader title="BACnet" subtitle="BACnet/IP and MS/TP gateway configuration" />
+      <PageHeader title="BACnet" subtitle="BACnet/IP, MS/TP, and routing configuration" />
 
       {message && (
         <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : 'error'}`}>
@@ -80,7 +72,7 @@ export default function BacnetPage() {
             <Form.Check
               type="switch"
               id="bacnet-ip"
-              label="Enable BACnet/IP"
+              label="Enable Service"
               checked={form.ip.enabled}
               onChange={(e) => updateIp('enabled', e.target.checked)}
               className="mb-3"
@@ -118,7 +110,7 @@ export default function BacnetPage() {
             <Form.Check
               type="switch"
               id="bbmd"
-              label="BBMD Enabled"
+              label="BBMD"
               checked={form.ip.bbmdEnabled}
               onChange={(e) => updateIp('bbmdEnabled', e.target.checked)}
               className="mb-2"
@@ -126,7 +118,7 @@ export default function BacnetPage() {
             <Form.Check
               type="switch"
               id="foreign-device"
-              label="Foreign Device Registration"
+              label="Foreign Device"
               checked={form.ip.foreignDeviceRegistrationEnabled}
               onChange={(e) => updateIp('foreignDeviceRegistrationEnabled', e.target.checked)}
             />
@@ -142,7 +134,7 @@ export default function BacnetPage() {
             <Form.Check
               type="switch"
               id="bacnet-mstp"
-              label="Enable MS/TP"
+              label="Enable Service"
               checked={form.mstp.enabled}
               onChange={(e) => updateMstp('enabled', e.target.checked)}
               className="mb-3"
@@ -213,41 +205,44 @@ export default function BacnetPage() {
         </Col>
       </Row>
 
-      <PanelCard title="Discovered Devices">
-        <Table responsive className="sentry-table mb-0">
-          <thead>
-            <tr>
-              <th>Instance</th>
-              <th>Vendor</th>
-              <th>Model</th>
-              <th>Address</th>
-              <th>Network</th>
-            </tr>
-          </thead>
-          <tbody>
-            {discovered.length === 0 ? (
-              <tr><td colSpan={5} style={{ textAlign: 'center', color: '#58677d' }}>No devices discovered yet</td></tr>
-            ) : (
-              discovered.map((device) => (
-                <tr key={device.deviceInstance}>
-                  <td>{device.deviceInstance}</td>
-                  <td>{device.vendor}</td>
-                  <td>{device.model}</td>
-                  <td>{device.address}</td>
-                  <td>{device.networkNumber}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </Table>
+      <PanelCard title="Routing">
+        <Row>
+          <Col sm={4}>
+            <Form.Group className="mb-2">
+              <Form.Label>IP Network</Form.Label>
+              <Form.Control
+                type="number"
+                value={form.routing.ipNetwork}
+                onChange={(e) => updateRouting('ipNetwork', Number(e.target.value))}
+              />
+            </Form.Group>
+          </Col>
+          <Col sm={4}>
+            <Form.Group className="mb-2">
+              <Form.Label>MS/TP Network</Form.Label>
+              <Form.Control
+                type="number"
+                value={form.routing.mstpNetwork}
+                onChange={(e) => updateRouting('mstpNetwork', Number(e.target.value))}
+              />
+            </Form.Group>
+          </Col>
+          <Col sm={4}>
+            <Form.Check
+              type="switch"
+              id="route-enabled"
+              label="Route Enabled"
+              checked={form.routing.routeEnabled}
+              onChange={(e) => updateRouting('routeEnabled', e.target.checked)}
+              className="mt-4"
+            />
+          </Col>
+        </Row>
       </PanelCard>
 
       <div className="action-bar">
         <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
-          Save BACnet Settings
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleDiscover} disabled={loading}>
-          Discover BACnet Devices
+          Save Settings
         </button>
       </div>
     </>

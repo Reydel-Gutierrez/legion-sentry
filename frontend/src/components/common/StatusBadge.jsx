@@ -4,16 +4,17 @@ const STATUS_MAP = {
   connected: 'connected',
   on: 'on',
   blink: 'blink',
+  online: 'running',
   stopped: 'stopped',
   down: 'down',
   disconnected: 'disconnected',
   off: 'off',
-  simulated: 'simulated',
+  offline: 'error',
+  warning: 'warn',
   warn: 'warn',
   error: 'error',
   fault: 'fault',
   idle: 'running',
-  online: 'running',
 };
 
 export default function StatusBadge({ status, label }) {

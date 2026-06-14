@@ -1,34 +1,14 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 
-const NAV_SECTIONS = [
-  {
-    label: 'Overview',
-    items: [
-      { to: '/', label: 'Dashboard', end: true, icon: 'dashboard' },
-    ],
-  },
-  {
-    label: 'Connectivity',
-    items: [
-      { to: '/network', label: 'Network', icon: 'network' },
-    ],
-  },
-  {
-    label: 'Protocols',
-    items: [
-      { to: '/bacnet', label: 'BACnet', icon: 'bacnet' },
-      { to: '/modbus', label: 'Modbus', icon: 'modbus' },
-      { to: '/mqtt', label: 'MQTT', icon: 'mqtt' },
-    ],
-  },
-  {
-    label: 'Maintenance',
-    items: [
-      { to: '/diagnostics', label: 'Diagnostics', icon: 'diagnostics' },
-      { to: '/logs', label: 'Logs', icon: 'logs' },
-      { to: '/system', label: 'System', icon: 'system' },
-    ],
-  },
+const NAV_ITEMS = [
+  { to: '/', label: 'Dashboard', end: true, icon: 'dashboard' },
+  { to: '/devices', label: 'Devices', icon: 'devices' },
+  { to: '/bacnet', label: 'BACnet', icon: 'bacnet' },
+  { to: '/modbus', label: 'Modbus', icon: 'modbus' },
+  { to: '/mqtt', label: 'MQTT', icon: 'mqtt' },
+  { to: '/diagnostics', label: 'Diagnostics', icon: 'diagnostics' },
+  { to: '/logs', label: 'Logs', icon: 'logs' },
+  { to: '/system', label: 'System', icon: 'system' },
 ];
 
 function NavIcon({ name }) {
@@ -38,9 +18,9 @@ function NavIcon({ name }) {
         <path d="M3 3h6v6H3V3zm8 0h6v6h-6V3zM3 11h6v6H3v-6zm8 0h6v6h-6v-6z" />
       </svg>
     ),
-    network: (
+    devices: (
       <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-        <path d="M10 2a6 6 0 00-6 6c0 2.2 1.2 4.1 3 5.2V16h6v-2.8c1.8-1.1 3-3 3-5.2a6 6 0 00-6-6zm-2 12v2h4v-2H8z" />
+        <path d="M4 3h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1zm2 3v2h8V6H6zm0 4v2h5v-2H6z" />
       </svg>
     ),
     bacnet: (
@@ -79,6 +59,8 @@ function NavIcon({ name }) {
 }
 
 export default function Sidebar() {
+  const location = useLocation();
+
   return (
     <aside className="app-sidebar">
       <div className="sidebar-brand">
@@ -91,22 +73,22 @@ export default function Sidebar() {
       </div>
 
       <nav className="sidebar-nav">
-        {NAV_SECTIONS.map((section) => (
-          <div key={section.label} className="nav-section">
-            <div className="nav-section-label">{section.label}</div>
-            {section.items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
-              >
-                <NavIcon name={item.icon} />
-                <span>{item.label}</span>
-              </NavLink>
-            ))}
-          </div>
-        ))}
+        <div className="nav-section nav-section--flat">
+          {NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              className={({ isActive }) => {
+                const active = isActive || (item.to === '/devices' && location.pathname.startsWith('/devices/'));
+                return `nav-link${active ? ' active' : ''}`;
+              }}
+            >
+              <NavIcon name={item.icon} />
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </div>
       </nav>
 
       <div className="sidebar-footer">

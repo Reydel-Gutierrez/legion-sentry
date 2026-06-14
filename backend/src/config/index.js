@@ -10,7 +10,6 @@ const DEVICE = {
   hostname: 'sentry-dev-1',
   firmwareVersion: '0.1.0-dev',
   deviceId: 'sentry-dev-1',
-  mode: 'simulated',
 };
 
 module.exports = {

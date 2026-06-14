@@ -15,18 +15,18 @@ export default function SystemPage() {
   }, []);
 
   const handleExport = () => {
-    setMessage({ type: 'success', text: 'Configuration export placeholder — file download not yet implemented.' });
+    setMessage({ type: 'success', text: 'Configuration export — file download not yet implemented.' });
   };
 
   const handleImport = () => {
-    setMessage({ type: 'success', text: 'Configuration import placeholder — file upload not yet implemented.' });
+    setMessage({ type: 'success', text: 'Configuration import — file upload not yet implemented.' });
   };
 
   if (!info) return <div className="loading-state">Loading system information…</div>;
 
   return (
     <>
-      <PageHeader title="System" subtitle="Device information and maintenance actions" />
+      <PageHeader title="System" subtitle="Device information and maintenance" />
 
       {message && (
         <div className="alert-sentry alert-sentry-success">{message.text}</div>
@@ -34,15 +34,14 @@ export default function SystemPage() {
 
       <Row>
         <Col lg={6}>
-          <PanelCard title="System Info">
+          <PanelCard title="System Information">
+            <KvRow label="Hostname" value={info.hostname} />
+            <KvRow label="IP" value={info.ip} />
             <KvRow label="OS" value={info.os} />
             <KvRow label="Node Version" value={info.nodeVersion} />
-            <KvRow label="App Version" value={info.appVersion} />
+            <KvRow label="Firmware Version" value={info.firmwareVersion} />
             <KvRow label="Hardware Profile" value={info.hardwareProfile} />
-            <KvRow label="Architecture" value={info.architecture} />
-            <KvRow label="Hostname" value={info.hostname} />
             <KvRow label="Product Code" value={info.productCode} />
-            <KvRow label="CPU Cores" value={info.cpuCount} />
             <MetricBar label="Disk Usage" value={info.diskUsage} barClass="bar-storage" />
             <KvRow label="Memory" value={`${info.memoryFreeMb} MB free / ${info.memoryTotalMb} MB total`} />
           </PanelCard>
@@ -50,12 +49,15 @@ export default function SystemPage() {
 
         <Col lg={6}>
           <PanelCard title="Maintenance">
-            <p style={{ color: '#58677d', fontSize: '0.8rem', marginBottom: '1rem' }}>
-              Destructive actions are disabled in this development build. Placeholders are shown for future hardware integration.
-            </p>
             <div className="d-flex flex-column gap-2">
+              <button type="button" className="btn btn-sentry-secondary" onClick={handleExport}>
+                Export Configuration
+              </button>
+              <button type="button" className="btn btn-sentry-secondary" onClick={handleImport}>
+                Import Configuration
+              </button>
               <button type="button" className="btn btn-sentry-secondary" disabled title="Requires confirmation — not implemented">
-                Restart Sentry Service
+                Restart Services
               </button>
               <button type="button" className="btn btn-sentry-danger" disabled title="Requires confirmation — not implemented">
                 Reboot Device
@@ -63,11 +65,8 @@ export default function SystemPage() {
               <button type="button" className="btn btn-sentry-danger" disabled title="Requires confirmation — not implemented">
                 Factory Reset
               </button>
-              <button type="button" className="btn btn-sentry-secondary" onClick={handleExport}>
-                Export Configuration
-              </button>
-              <button type="button" className="btn btn-sentry-secondary" onClick={handleImport}>
-                Import Configuration
+              <button type="button" className="btn btn-sentry-secondary" disabled title="Firmware update — not implemented">
+                Firmware Update
               </button>
             </div>
           </PanelCard>

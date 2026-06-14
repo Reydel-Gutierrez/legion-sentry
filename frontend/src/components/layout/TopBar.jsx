@@ -3,7 +3,7 @@ import StatusBadge from '../common/StatusBadge';
 
 const ROUTE_LABELS = {
   '/': 'Dashboard',
-  '/network': 'Network',
+  '/devices': 'Devices',
   '/bacnet': 'BACnet',
   '/modbus': 'Modbus',
   '/mqtt': 'MQTT',
@@ -12,9 +12,14 @@ const ROUTE_LABELS = {
   '/system': 'System',
 };
 
+function getPageLabel(pathname) {
+  if (pathname.startsWith('/devices/')) return 'Device Details';
+  return ROUTE_LABELS[pathname] || 'Sentry G1';
+}
+
 export default function TopBar({ topBar }) {
   const location = useLocation();
-  const pageLabel = ROUTE_LABELS[location.pathname] || 'Sentry G1';
+  const pageLabel = getPageLabel(location.pathname);
 
   return (
     <>
@@ -35,7 +40,7 @@ export default function TopBar({ topBar }) {
         <div className="topbar-right">
           {topBar && (
             <>
-              <StatusBadge status="simulated" label={topBar.badge} />
+              <StatusBadge status="running" label="Online" />
               <div className="topbar-stat">
                 <span className="label">IP</span>
                 <span className="value">{topBar.ip}</span>
@@ -49,15 +54,11 @@ export default function TopBar({ topBar }) {
         <div className="app-statusbar">
           <div className="statusbar-left">
             <span className="statusbar-item">
-              <StatusBadge status="running" label="Service Online" />
+              <StatusBadge status="running" label="Router Active" />
             </span>
             <span className="statusbar-item">
               <span className="statusbar-label">Uptime</span>
               <span className="statusbar-value">{topBar.uptime}</span>
-            </span>
-            <span className="statusbar-item">
-              <span className="statusbar-label">Mode</span>
-              <span className="statusbar-value accent">Simulated</span>
             </span>
           </div>
           <div className="statusbar-right">

@@ -10,6 +10,7 @@ const modbusRoutes = require('./routes/modbus');
 const mqttRoutes = require('./routes/mqtt');
 const diagnosticsRoutes = require('./routes/diagnostics');
 const logsRoutes = require('./routes/logs');
+const devicesRoutes = require('./routes/devices');
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use('/api/modbus', modbusRoutes);
 app.use('/api/mqtt', mqttRoutes);
 app.use('/api/diagnostics', diagnosticsRoutes);
 app.use('/api/logs', logsRoutes);
+app.use('/api/devices', devicesRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error(err);

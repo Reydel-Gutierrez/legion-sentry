@@ -6,7 +6,10 @@
       "staticIp": "192.168.1.50",
       "subnetMask": "255.255.255.0",
       "gateway": "192.168.1.1",
-      "dns": ["192.168.1.1", "8.8.8.8"]
+      "dns": [
+        "192.168.1.1",
+        "8.8.8.8"
+      ]
     },
     "wifi": {
       "enabled": false,
@@ -33,6 +36,11 @@
       "maxMaster": 127,
       "maxInfoFrames": 1,
       "networkNumber": 2
+    },
+    "routing": {
+      "ipNetwork": 1,
+      "mstpNetwork": 2,
+      "routeEnabled": true
     }
   },
   "modbus": {
@@ -41,7 +49,10 @@
       "port": 502,
       "unitId": 1,
       "timeout": 3000,
-      "pollInterval": 1000
+      "pollInterval": 1000,
+      "status": "running",
+      "connections": 2,
+      "lastPollMs": 980
     },
     "rtu": {
       "enabled": true,
@@ -50,7 +61,10 @@
       "parity": "none",
       "dataBits": 8,
       "stopBits": 1,
-      "unitId": 1
+      "unitId": 1,
+      "status": "running",
+      "busState": "idle",
+      "lastResponseMs": 42
     }
   },
   "mqtt": {

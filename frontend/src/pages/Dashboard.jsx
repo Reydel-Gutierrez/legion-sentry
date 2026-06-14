@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Col, Row } from 'react-bootstrap';
 import { api } from '../api/client';
-import KvRow from '../components/common/KvRow';
 import MetricBar from '../components/common/MetricBar';
 import PanelCard from '../components/common/PanelCard';
 import ServiceStatusRow from '../components/common/ServiceStatusRow';
-import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
+
+function formatTimestamp(iso) {
+  return new Date(iso).toLocaleString();
+}
 
 export default function DashboardPage() {
   const [data, setData] = useState(null);
@@ -25,82 +28,89 @@ export default function DashboardPage() {
   }, []);
 
   if (error) return <div className="alert-sentry alert-sentry-error">{error}</div>;
-  if (!data) return <div className="loading-state">Loading device status…</div>;
+  if (!data) return <div className="loading-state">Loading router status…</div>;
 
-  const { identity, system, interfaces, services } = data;
+  const { system, services, devices, recentEvents } = data;
 
   return (
     <>
       <PageHeader
         title="Dashboard"
-        subtitle="Device identity, system health, interfaces, and service status"
+        subtitle="Router health, device status, and service overview"
       />
 
+      <Row className="g-3 mb-3">
+        <Col sm={6} lg={3}>
+          <div className="stat-card">
+            <div className="stat-card-label">BACnet Devices</div>
+            <div className="stat-card-value">{devices.bacnetDevices}</div>
+          </div>
+        </Col>
+        <Col sm={6} lg={3}>
+          <div className="stat-card stat-card--success">
+            <div className="stat-card-label">Online Devices</div>
+            <div className="stat-card-value">{devices.onlineDevices}</div>
+          </div>
+        </Col>
+        <Col sm={6} lg={3}>
+          <div className="stat-card stat-card--danger">
+            <div className="stat-card-label">Offline Devices</div>
+            <div className="stat-card-value">{devices.offlineDevices}</div>
+          </div>
+        </Col>
+        <Col sm={6} lg={3}>
+          <div className="stat-card">
+            <div className="stat-card-label">MS/TP Networks</div>
+            <div className="stat-card-value">{devices.mstpNetworks}</div>
+          </div>
+        </Col>
+      </Row>
+
       <Row>
-        <Col lg={4}>
-          <PanelCard title="Device Identity">
-            <KvRow label="Product" value={identity.product} />
-            <KvRow label="Hardware Profile" value={identity.hardwareProfile} />
-            <KvRow label="Hostname" value={identity.hostname} />
-            <KvRow label="Firmware Version" value={identity.firmwareVersion} />
-            <KvRow label="Product Code" value={identity.productCode} />
+        <Col lg={6}>
+          <PanelCard title="Service Status">
+            <ServiceStatusRow name={services.bacnetIp.name} status={services.bacnetIp.status} detail={`UDP ${services.bacnetIp.port}`} />
+            <ServiceStatusRow name={services.bacnetMstp.name} status={services.bacnetMstp.status} detail={services.bacnetMstp.port} />
+            <ServiceStatusRow name={services.modbusTcp.name} status={services.modbusTcp.status} detail={`TCP ${services.modbusTcp.port}`} />
+            <ServiceStatusRow name={services.modbusRtu.name} status={services.modbusRtu.status} detail={services.modbusRtu.port} />
+            <ServiceStatusRow name={services.mqtt.name} status={services.mqtt.status} detail={services.mqtt.port ? `Port ${services.mqtt.port}` : null} />
           </PanelCard>
         </Col>
 
-        <Col lg={4}>
-          <PanelCard title="System Status">
-            <MetricBar label="CPU Usage" value={system.cpuUsage} barClass="bar-cpu" />
-            <MetricBar label="Memory Usage" value={system.memoryUsage} barClass="bar-memory" />
-            <MetricBar label="Storage Usage" value={system.storageUsage} barClass="bar-storage" />
+        <Col lg={6}>
+          <PanelCard title="System Health">
+            <MetricBar label="CPU" value={system.cpuUsage} barClass="bar-cpu" />
+            <MetricBar label="Memory" value={system.memoryUsage} barClass="bar-memory" />
             <MetricBar label="Temperature" value={system.temperature} barClass="bar-temp" />
-            <KvRow label="Uptime" value={system.uptime} />
-          </PanelCard>
-        </Col>
-
-        <Col lg={4}>
-          <PanelCard title="Interfaces">
+            <MetricBar label="Storage" value={system.storageUsage} barClass="bar-storage" />
             <div className="kv-row">
-              <span className="kv-label">ETH0</span>
-              <span className="kv-value">
-                <StatusBadge status={interfaces.eth0.status} label={interfaces.eth0.link} />
-              </span>
-            </div>
-            <KvRow label="ETH0 IP" value={interfaces.eth0.ip} />
-            <div className="kv-row">
-              <span className="kv-label">WiFi</span>
-              <span className="kv-value">
-                <StatusBadge status={interfaces.wifi.status} />
-              </span>
-            </div>
-            <div className="kv-row">
-              <span className="kv-label">RS485-1</span>
-              <span className="kv-value">
-                <StatusBadge status={interfaces.rs485.status} label={interfaces.rs485.port} />
-              </span>
-            </div>
-            <div className="kv-row">
-              <span className="kv-label">GPIO</span>
-              <span className="kv-value">
-                <StatusBadge status={interfaces.gpio.status} label={`${interfaces.gpio.leds} LEDs`} />
-              </span>
+              <span className="kv-label">Uptime</span>
+              <span className="kv-value">{system.uptime}</span>
             </div>
           </PanelCard>
         </Col>
       </Row>
 
-      <PanelCard title="Services">
-        <Row>
-          <Col md={6}>
-            <ServiceStatusRow name={services.bacnetIp.name} status={services.bacnetIp.status} detail={`UDP ${services.bacnetIp.port}`} />
-            <ServiceStatusRow name={services.bacnetMstp.name} status={services.bacnetMstp.status} detail={services.bacnetMstp.port} />
-            <ServiceStatusRow name={services.modbusTcp.name} status={services.modbusTcp.status} detail={`TCP ${services.modbusTcp.port}`} />
-          </Col>
-          <Col md={6}>
-            <ServiceStatusRow name={services.modbusRtu.name} status={services.modbusRtu.status} detail={services.modbusRtu.port} />
-            <ServiceStatusRow name={services.mqtt.name} status={services.mqtt.status} detail={services.mqtt.port ? `Port ${services.mqtt.port}` : null} />
-            <ServiceStatusRow name={services.diagnostics.name} status={services.diagnostics.status} />
-          </Col>
-        </Row>
+      <PanelCard title="Recent Events">
+        {recentEvents.length === 0 ? (
+          <p style={{ color: '#58677d', margin: 0 }}>No recent events</p>
+        ) : (
+          <div className="event-list">
+            {recentEvents.map((event) => (
+              <div key={event.id} className="event-row">
+                <span className="event-ts">{formatTimestamp(event.timestamp)}</span>
+                <span className={`log-level level-${event.level}`}>{event.level}</span>
+                <span className="event-service">{event.service}</span>
+                <span className="event-message">{event.message}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="action-bar" style={{ marginTop: '0.75rem', paddingTop: '0.75rem' }}>
+          <Link to="/devices" className="btn btn-sentry-primary">View Devices</Link>
+          <Link to="/diagnostics" className="btn btn-sentry-secondary">Diagnostics</Link>
+          <Link to="/logs" className="btn btn-sentry-secondary">View Logs</Link>
+        </div>
       </PanelCard>
     </>
   );

@@ -32,14 +32,14 @@ export default function DiagnosticsPage() {
 
   return (
     <>
-      <PageHeader title="Diagnostics" subtitle="Network, protocol, and hardware diagnostic status" />
+      <PageHeader title="Diagnostics" subtitle="Network, protocol, and hardware diagnostic tests" />
 
       <Row>
-        <Col lg={4}>
+        <Col lg={6}>
           <PanelCard title="Network Diagnostics">
-            <KvRow label="Ping (8.8.8.8)" value={network.ping.success ? `${network.ping.latencyMs}ms` : 'Failed'} />
-            <KvRow label="DNS (google.com)" value={network.dns.resolvedIp} />
-            <KvRow label="Gateway (192.168.1.1)" value={network.gateway.success ? `${network.gateway.latencyMs}ms` : 'Failed'} />
+            <KvRow label="Ping Test" value={network.ping.success ? `${network.ping.latencyMs}ms` : 'Failed'} />
+            <KvRow label="Gateway Reachability" value={network.gateway.success ? `${network.gateway.latencyMs}ms` : 'Failed'} />
+            <KvRow label="DNS Test" value={network.dns.resolvedIp} />
             {pingResult && (
               <div className="alert-sentry alert-sentry-success mt-2">
                 Ping {pingResult.target}: avg {pingResult.avgMs}ms, loss {pingResult.packetLoss}%
@@ -53,38 +53,40 @@ export default function DiagnosticsPage() {
           </PanelCard>
         </Col>
 
-        <Col lg={4}>
+        <Col lg={6}>
           <PanelCard title="BACnet Diagnostics">
-            <KvRow label="IP Devices Discovered" value={bacnet.ipDevicesDiscovered} />
-            <KvRow label="MS/TP Bus Status" value={bacnet.mstpBusStatus} />
-            <KvRow label="RX Count" value={bacnet.rxCount.toLocaleString()} />
-            <KvRow label="TX Count" value={bacnet.txCount.toLocaleString()} />
-            <KvRow label="Error Count" value={bacnet.errorCount} />
-            <KvRow label="Last Error" value={bacnet.lastError} />
+            <KvRow label="IP RX Packets" value={bacnet.ipRxPackets.toLocaleString()} />
+            <KvRow label="IP TX Packets" value={bacnet.ipTxPackets.toLocaleString()} />
+            <KvRow label="MS/TP RX Packets" value={bacnet.mstpRxPackets.toLocaleString()} />
+            <KvRow label="MS/TP TX Packets" value={bacnet.mstpTxPackets.toLocaleString()} />
+            <KvRow label="Timeouts" value={bacnet.timeouts} />
+            <KvRow label="Retries" value={bacnet.retries} />
+            <KvRow label="CRC Errors" value={bacnet.crcErrors} />
+            <KvRow label="Last BACnet Error" value={bacnet.lastError} />
           </PanelCard>
         </Col>
+      </Row>
 
-        <Col lg={4}>
+      <Row>
+        <Col lg={6}>
           <PanelCard title="Modbus Diagnostics">
-            <div className="kv-row">
-              <span className="kv-label">RTU Status</span>
-              <span className="kv-value"><StatusBadge status={modbus.rtuStatus} /></span>
-            </div>
             <div className="kv-row">
               <span className="kv-label">TCP Status</span>
               <span className="kv-value"><StatusBadge status={modbus.tcpStatus} /></span>
+            </div>
+            <div className="kv-row">
+              <span className="kv-label">RTU Status</span>
+              <span className="kv-value"><StatusBadge status={modbus.rtuStatus} /></span>
             </div>
             <KvRow label="Last Response Time" value={`${modbus.lastResponseTimeMs}ms`} />
             <KvRow label="Error Count" value={modbus.errorCount} />
           </PanelCard>
         </Col>
-      </Row>
 
-      <PanelCard title="GPIO / LED Diagnostics">
-        <Row>
-          {Object.values(gpio).map((item) => (
-            <Col key={item.name} sm={6} md={4} lg={3}>
-              <div className="kv-row">
+        <Col lg={6}>
+          <PanelCard title="GPIO Diagnostics">
+            {Object.values(gpio).map((item) => (
+              <div key={item.name} className="kv-row">
                 <span className="kv-label">{item.name}</span>
                 <span className="kv-value">
                   <StatusBadge
@@ -93,10 +95,10 @@ export default function DiagnosticsPage() {
                   />
                 </span>
               </div>
-            </Col>
-          ))}
-        </Row>
-      </PanelCard>
+            ))}
+          </PanelCard>
+        </Col>
+      </Row>
     </>
   );
 }

@@ -14,14 +14,4 @@ router.post('/settings', (req, res) => {
   res.json({ success: true, data: result });
 });
 
-router.post('/discover', (_req, res) => {
-  const result = bacnetService.discoverDevices();
-  logsService.addLog({
-    level: 'info',
-    service: 'bacnet',
-    message: `BACnet discovery completed — ${result.devices.length} devices found`,
-  });
-  res.json(result);
-});
-
 module.exports = router;

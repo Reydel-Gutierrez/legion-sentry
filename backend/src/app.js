@@ -11,6 +11,7 @@ const mqttRoutes = require('./routes/mqtt');
 const diagnosticsRoutes = require('./routes/diagnostics');
 const logsRoutes = require('./routes/logs');
 const devicesRoutes = require('./routes/devices');
+const interfacesRoutes = require('./routes/interfaces');
 
 const app = express();
 
@@ -31,10 +32,15 @@ app.use('/api/mqtt', mqttRoutes);
 app.use('/api/diagnostics', diagnosticsRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/api/devices', devicesRoutes);
+app.use('/api/interfaces', interfacesRoutes);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
-  res.status(500).json({ error: 'Internal server error' });
+  const status = err.statusCode || 500;
+  res.status(status).json({
+    error: err.message || 'Internal server error',
+    code: err.code,
+  });
 });
 
 module.exports = app;

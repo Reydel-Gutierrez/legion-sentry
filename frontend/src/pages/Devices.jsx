@@ -34,7 +34,11 @@ export default function DevicesPage() {
     try {
       const result = await api.refreshDevices();
       setDevices(result.devices);
-      setMessage({ type: 'success', text: 'Device list refreshed.' });
+      if (result.devices.length === 0) {
+        setMessage({ type: 'info', text: 'No devices discovered yet.' });
+      } else {
+        setMessage({ type: 'success', text: 'Device list refreshed.' });
+      }
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -68,7 +72,7 @@ export default function DevicesPage() {
       />
 
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : 'error'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'info' ? 'info' : 'success'}`}>
           {message.text}
         </div>
       )}
@@ -91,7 +95,7 @@ export default function DevicesPage() {
             {devices.length === 0 ? (
               <tr>
                 <td colSpan={8} style={{ textAlign: 'center', color: '#58677d' }}>
-                  No devices discovered — run a BACnet discovery scan
+                  No devices discovered yet
                 </td>
               </tr>
             ) : (
@@ -121,7 +125,7 @@ export default function DevicesPage() {
 
       <div className="action-bar">
         <button type="button" className="btn btn-sentry-secondary" onClick={handleRefresh} disabled={loading}>
-          Refresh Devices
+          Refresh
         </button>
         <button type="button" className="btn btn-sentry-primary" onClick={() => handleDiscover('bacnet-ip')} disabled={loading}>
           Discover BACnet/IP

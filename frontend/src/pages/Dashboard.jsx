@@ -2,13 +2,20 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Col, Row } from 'react-bootstrap';
 import { api } from '../api/client';
+import KvRow from '../components/common/KvRow';
 import MetricBar from '../components/common/MetricBar';
 import PanelCard from '../components/common/PanelCard';
 import ServiceStatusRow from '../components/common/ServiceStatusRow';
+import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
 
 function formatTimestamp(iso) {
   return new Date(iso).toLocaleString();
+}
+
+function deviceStat(value, scanned) {
+  if (!scanned) return 'Not scanned yet';
+  return value ?? 0;
 }
 
 export default function DashboardPage() {
@@ -28,40 +35,49 @@ export default function DashboardPage() {
   }, []);
 
   if (error) return <div className="alert-sentry alert-sentry-error">{error}</div>;
-  if (!data) return <div className="loading-state">Loading router status…</div>;
+  if (!data) return <div className="loading-state">Loading system status…</div>;
 
-  const { system, services, devices, recentEvents } = data;
+  const { system, services, devices, recentEvents, interfaces, hostname, hardwareProfile, runtimeMode } = data;
+  const eth0 = interfaces?.eth0;
 
   return (
     <>
       <PageHeader
         title="Dashboard"
-        subtitle="Router health, device status, and service overview"
+        subtitle="Live hardware status, service configuration, and device overview"
       />
 
       <Row className="g-3 mb-3">
         <Col sm={6} lg={3}>
           <div className="stat-card">
             <div className="stat-card-label">BACnet Devices</div>
-            <div className="stat-card-value">{devices.bacnetDevices}</div>
+            <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
+              {deviceStat(devices.bacnetDevices, devices.scanned)}
+            </div>
           </div>
         </Col>
         <Col sm={6} lg={3}>
           <div className="stat-card stat-card--success">
             <div className="stat-card-label">Online Devices</div>
-            <div className="stat-card-value">{devices.onlineDevices}</div>
+            <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
+              {deviceStat(devices.onlineDevices, devices.scanned)}
+            </div>
           </div>
         </Col>
         <Col sm={6} lg={3}>
           <div className="stat-card stat-card--danger">
             <div className="stat-card-label">Offline Devices</div>
-            <div className="stat-card-value">{devices.offlineDevices}</div>
+            <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
+              {deviceStat(devices.offlineDevices, devices.scanned)}
+            </div>
           </div>
         </Col>
         <Col sm={6} lg={3}>
           <div className="stat-card">
             <div className="stat-card-label">MS/TP Networks</div>
-            <div className="stat-card-value">{devices.mstpNetworks}</div>
+            <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
+              {deviceStat(devices.mstpNetworks, devices.scanned)}
+            </div>
           </div>
         </Col>
       </Row>
@@ -69,24 +85,48 @@ export default function DashboardPage() {
       <Row>
         <Col lg={6}>
           <PanelCard title="Service Status">
-            <ServiceStatusRow name={services.bacnetIp.name} status={services.bacnetIp.status} detail={`UDP ${services.bacnetIp.port}`} />
-            <ServiceStatusRow name={services.bacnetMstp.name} status={services.bacnetMstp.status} detail={services.bacnetMstp.port} />
-            <ServiceStatusRow name={services.modbusTcp.name} status={services.modbusTcp.status} detail={`TCP ${services.modbusTcp.port}`} />
-            <ServiceStatusRow name={services.modbusRtu.name} status={services.modbusRtu.status} detail={services.modbusRtu.port} />
-            <ServiceStatusRow name={services.mqtt.name} status={services.mqtt.status} detail={services.mqtt.port ? `Port ${services.mqtt.port}` : null} />
+            <ServiceStatusRow name={services.bacnetIp.name} status={services.bacnetIp.status} label={services.bacnetIp.label} />
+            <ServiceStatusRow name={services.bacnetMstp.name} status={services.bacnetMstp.status} label={services.bacnetMstp.label} />
+            <ServiceStatusRow name={services.modbusTcp.name} status={services.modbusTcp.status} label={services.modbusTcp.label} />
+            <ServiceStatusRow name={services.modbusRtu.name} status={services.modbusRtu.status} label={services.modbusRtu.label} />
+            <ServiceStatusRow name={services.mqtt.name} status={services.mqtt.status} label={services.mqtt.label} />
           </PanelCard>
         </Col>
 
         <Col lg={6}>
           <PanelCard title="System Health">
-            <MetricBar label="CPU" value={system.cpuUsage} barClass="bar-cpu" />
+            <MetricBar label="CPU Load" value={system.cpuUsage} barClass="bar-cpu" />
             <MetricBar label="Memory" value={system.memoryUsage} barClass="bar-memory" />
             <MetricBar label="Temperature" value={system.temperature} barClass="bar-temp" />
-            <MetricBar label="Storage" value={system.storageUsage} barClass="bar-storage" />
-            <div className="kv-row">
-              <span className="kv-label">Uptime</span>
-              <span className="kv-value">{system.uptime}</span>
-            </div>
+            <MetricBar label="Disk" value={system.storageUsage} barClass="bar-storage" />
+            <KvRow label="Uptime" value={system.uptime} />
+            <KvRow label="OS" value={system.os} />
+          </PanelCard>
+        </Col>
+      </Row>
+
+      <Row className="mt-0">
+        <Col lg={12}>
+          <PanelCard title="Hardware">
+            <Row>
+              <Col md={6}>
+                <KvRow label="Hostname" value={hostname} />
+                <KvRow label="Hardware Profile" value={hardwareProfile} />
+                <KvRow label="Runtime Mode" value={<StatusBadge status={runtimeMode === 'REAL HARDWARE' ? 'real hardware' : 'development'} label={runtimeMode} />} />
+              </Col>
+              <Col md={6}>
+                <KvRow
+                  label="eth0"
+                  value={(
+                    <>
+                      <StatusBadge status={eth0?.status || 'not_present'} label={eth0?.status || 'not present'} />
+                      {eth0?.ip && <span className="mono" style={{ marginLeft: '0.5rem' }}>{eth0.ip}</span>}
+                    </>
+                  )}
+                />
+                <KvRow label="Primary IP" value={data.topBar?.ip || '—'} />
+              </Col>
+            </Row>
           </PanelCard>
         </Col>
       </Row>

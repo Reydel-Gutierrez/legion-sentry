@@ -5,11 +5,12 @@ function getMqttStatus() {
   const settings = loadSettings().mqtt;
   return {
     ...settings,
-    status: settings.enabled ? 'connected' : 'disconnected',
+    status: 'disabled',
+    label: 'Disabled',
     clientId: `legion-sentry-${DEVICE.deviceId}`,
-    lastConnected: settings.enabled ? new Date(Date.now() - 3600000).toISOString() : null,
-    messagesPublished: settings.enabled ? 1284 : 0,
-    messagesReceived: settings.enabled ? 42 : 0,
+    lastConnected: null,
+    messagesPublished: 0,
+    messagesReceived: 0,
   };
 }
 

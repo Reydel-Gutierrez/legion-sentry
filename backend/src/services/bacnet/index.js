@@ -5,19 +5,21 @@ function getBacnetStatus() {
   return {
     ip: {
       ...settings.ip,
-      status: settings.ip.enabled ? 'running' : 'stopped',
-      boundPort: settings.ip.udpPort,
+      status: 'not_configured',
+      label: 'Not configured',
+      boundPort: null,
     },
     mstp: {
       ...settings.mstp,
-      status: settings.mstp.enabled ? 'running' : 'stopped',
-      busState: 'online',
-      tokenHolder: settings.mstp.macAddress,
+      status: 'not_configured',
+      label: 'Not configured',
+      busState: null,
+      tokenHolder: null,
     },
     routing: settings.routing || {
       ipNetwork: 1,
       mstpNetwork: 2,
-      routeEnabled: true,
+      routeEnabled: false,
     },
   };
 }

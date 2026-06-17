@@ -17,9 +17,17 @@ function getPageLabel(pathname) {
   return ROUTE_LABELS[pathname] || 'Sentry G1';
 }
 
+function runtimeBadgeProps(runtimeMode) {
+  if (runtimeMode === 'REAL HARDWARE') {
+    return { status: 'real hardware', label: 'REAL HARDWARE', variant: 'hardware' };
+  }
+  return { status: 'development', label: 'DEVELOPMENT', variant: 'simulated' };
+}
+
 export default function TopBar({ topBar }) {
   const location = useLocation();
   const pageLabel = getPageLabel(location.pathname);
+  const runtimeBadge = topBar ? runtimeBadgeProps(topBar.runtimeMode) : null;
 
   return (
     <>
@@ -32,7 +40,7 @@ export default function TopBar({ topBar }) {
               </svg>
             </Link>
             <span className="breadcrumb-sep">/</span>
-            <span className="breadcrumb-device">Sentry G1</span>
+            <span className="breadcrumb-device">{topBar?.hostname || 'Sentry G1'}</span>
             <span className="breadcrumb-sep">/</span>
             <span className="breadcrumb-current">{pageLabel}</span>
           </nav>
@@ -40,7 +48,13 @@ export default function TopBar({ topBar }) {
         <div className="topbar-right">
           {topBar && (
             <>
-              <StatusBadge status="running" label="Online" />
+              {runtimeBadge && (
+                <StatusBadge
+                  status={runtimeBadge.status}
+                  label={runtimeBadge.label}
+                  variant={runtimeBadge.variant}
+                />
+              )}
               <div className="topbar-stat">
                 <span className="label">IP</span>
                 <span className="value">{topBar.ip}</span>
@@ -53,9 +67,6 @@ export default function TopBar({ topBar }) {
       {topBar && (
         <div className="app-statusbar">
           <div className="statusbar-left">
-            <span className="statusbar-item">
-              <StatusBadge status="running" label="Router Active" />
-            </span>
             <span className="statusbar-item">
               <span className="statusbar-label">Uptime</span>
               <span className="statusbar-value">{topBar.uptime}</span>

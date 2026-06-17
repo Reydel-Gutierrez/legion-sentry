@@ -44,6 +44,10 @@ export default function SystemPage() {
             <KvRow label="Product Code" value={info.productCode} />
             <MetricBar label="Disk Usage" value={info.diskUsage} barClass="bar-storage" />
             <KvRow label="Memory" value={`${info.memoryFreeMb} MB free / ${info.memoryTotalMb} MB total`} />
+            <KvRow label="CPU Load" value={info.cpuLoadPercent != null ? `${info.cpuLoadPercent}%` : '—'} />
+            <KvRow label="Temperature" value={info.temperature != null ? `${info.temperature}°C` : '—'} />
+            <KvRow label="Uptime" value={info.uptime} />
+            <KvRow label="Runtime Mode" value={info.runtimeMode} />
           </PanelCard>
         </Col>
 

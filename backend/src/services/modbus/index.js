@@ -5,15 +5,17 @@ function getModbusStatus() {
   return {
     tcp: {
       ...settings.tcp,
-      status: settings.tcp.enabled ? 'running' : 'stopped',
-      connections: settings.tcp.enabled ? 2 : 0,
-      lastPollMs: 980,
+      status: 'not_configured',
+      label: 'Not configured',
+      connections: 0,
+      lastPollMs: null,
     },
     rtu: {
       ...settings.rtu,
-      status: settings.rtu.enabled ? 'running' : 'stopped',
-      busState: settings.rtu.enabled ? 'idle' : 'offline',
-      lastResponseMs: 42,
+      status: 'not_configured',
+      label: 'Not configured',
+      busState: null,
+      lastResponseMs: null,
     },
   };
 }

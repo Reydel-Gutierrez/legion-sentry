@@ -8,25 +8,31 @@ router.get('/', (_req, res) => {
   res.json(deviceService.getDevices());
 });
 
-router.post('/discover', (req, res) => {
-  const protocol = req.body?.protocol || 'all';
-  const result = deviceService.discoverDevices(protocol);
-  const label = protocol === 'bacnet-ip' ? 'BACnet/IP' : protocol === 'bacnet-mstp' ? 'BACnet MS/TP' : 'BACnet';
-  logsService.addLog({
-    level: 'info',
-    service: 'bacnet',
-    message: `${label} discovery completed — ${result.devicesFound} devices found`,
-  });
-  res.json(result);
+router.post('/discover', (req, res, next) => {
+  try {
+    const protocol = req.body?.protocol || 'all';
+    const result = deviceService.discoverDevices(protocol);
+    const label = protocol === 'bacnet-ip' ? 'BACnet/IP' : protocol === 'bacnet-mstp' ? 'BACnet MS/TP' : 'BACnet';
+    logsService.addLog({
+      level: 'info',
+      service: 'bacnet',
+      message: `${label} discovery completed — ${result.devicesFound} devices found`,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post('/refresh', (_req, res) => {
   const result = deviceService.refreshDevices();
-  logsService.addLog({
-    level: 'info',
-    service: 'bacnet',
-    message: `Device list refreshed — ${result.devices.length} devices`,
-  });
+  if (result.scanned && result.devices.length > 0) {
+    logsService.addLog({
+      level: 'info',
+      service: 'bacnet',
+      message: `Device list refreshed — ${result.devices.length} devices`,
+    });
+  }
   res.json(result);
 });
 

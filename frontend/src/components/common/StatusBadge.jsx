@@ -15,14 +15,19 @@ const STATUS_MAP = {
   error: 'error',
   fault: 'fault',
   idle: 'running',
+  not_configured: 'stopped',
+  disabled: 'stopped',
+  not_present: 'stopped',
+  'real hardware': 'hardware',
+  development: 'simulated',
 };
 
-export default function StatusBadge({ status, label }) {
+export default function StatusBadge({ status, label, variant }) {
   const normalized = (status || 'stopped').toLowerCase();
-  const variant = STATUS_MAP[normalized] || 'stopped';
+  const badgeVariant = variant || STATUS_MAP[normalized] || 'stopped';
 
   return (
-    <span className={`status-badge badge-${variant}`}>
+    <span className={`status-badge badge-${badgeVariant}`}>
       <span className="status-dot" />
       {label || status}
     </span>

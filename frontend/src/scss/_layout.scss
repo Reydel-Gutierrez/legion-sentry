@@ -465,6 +465,12 @@ body {
     border: 1px solid $accent-border;
   }
 
+  &.badge-hardware {
+    background: $success-glow;
+    color: $success;
+    border: 1px solid rgba($success, 0.35);
+  }
+
   &.badge-running,
   &.badge-up,
   &.badge-connected,
@@ -795,6 +801,12 @@ body {
   color: lighten($danger, 8%);
 }
 
+.alert-sentry-info {
+  border-color: rgba($accent, 0.35);
+  background: rgba($accent, 0.06);
+  color: lighten($accent, 12%);
+}
+
 .loading-state {
   color: $text-muted;
   padding: 3rem 2rem;
@@ -850,6 +862,12 @@ body {
     color: $text-white;
     font-family: $font-mono;
     line-height: 1.1;
+
+    &--muted {
+      font-size: 0.95rem;
+      font-weight: 500;
+      color: $text-muted;
+    }
   }
 
   &--success .stat-card-value {

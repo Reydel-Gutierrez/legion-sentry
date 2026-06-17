@@ -43,4 +43,6 @@ export const api = {
   runPing: (target) => request('/diagnostics/ping', { method: 'POST', body: JSON.stringify({ target }) }),
   getLogs: (filter = 'all') => request(`/logs?filter=${filter}`),
   clearLogs: () => request('/logs/clear', { method: 'POST' }),
+  getSerialInterfaces: () => request('/interfaces/serial'),
+  getNetworkInterfaces: () => request('/interfaces/network'),
 };

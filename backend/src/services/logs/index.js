@@ -1,5 +1,5 @@
 const LOG_LEVELS = ['info', 'warn', 'error', 'debug'];
-const SERVICES = ['system', 'network', 'bacnet', 'modbus', 'mqtt', 'fault'];
+const SERVICES = ['system', 'network', 'bacnet', 'modbus', 'mqtt', 'fault', 'interfaces'];
 
 let logs = [];
 let nextId = 1;

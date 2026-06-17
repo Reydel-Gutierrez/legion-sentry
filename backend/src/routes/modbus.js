@@ -14,14 +14,18 @@ router.post('/settings', (req, res) => {
   res.json({ success: true, data: result });
 });
 
-router.post('/test-read', (_req, res) => {
-  const result = modbusService.testReadRegister();
-  logsService.addLog({
-    level: 'info',
-    service: 'modbus',
-    message: `Modbus test read register ${result.register} = ${result.value}`,
-  });
-  res.json(result);
+router.post('/test-read', (_req, res, next) => {
+  try {
+    const result = modbusService.testReadRegister();
+    logsService.addLog({
+      level: 'info',
+      service: 'modbus',
+      message: `Modbus test read register ${result.register} = ${result.value}`,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post('/scan', (_req, res) => {

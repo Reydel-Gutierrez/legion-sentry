@@ -14,24 +14,24 @@ router.post('/settings', (req, res) => {
   res.json({ success: true, data: result });
 });
 
-router.post('/test', (_req, res) => {
-  const result = mqttService.testConnection();
-  logsService.addLog({
-    level: result.success ? 'info' : 'warn',
-    service: 'mqtt',
-    message: result.message,
-  });
-  res.json(result);
+router.post('/test', (_req, res, next) => {
+  try {
+    const result = mqttService.testConnection();
+    logsService.addLog({ level: 'info', service: 'mqtt', message: result.message });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.post('/publish-test', (_req, res) => {
-  const result = mqttService.publishTestMessage();
-  logsService.addLog({
-    level: result.success ? 'info' : 'warn',
-    service: 'mqtt',
-    message: result.message,
-  });
-  res.json(result);
+router.post('/publish-test', (_req, res, next) => {
+  try {
+    const result = mqttService.publishTestMessage();
+    logsService.addLog({ level: 'info', service: 'mqtt', message: result.message });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 });
 
 module.exports = router;

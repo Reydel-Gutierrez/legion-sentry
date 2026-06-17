@@ -73,9 +73,12 @@ function getIpAddresses() {
 }
 
 function getPrimaryIpv4() {
-  const eth0 = os.networkInterfaces().eth0;
-  if (eth0) {
-    const ipv4 = eth0.find((a) => a.family === 'IPv4' && !a.internal);
+  const interfaces = os.networkInterfaces();
+
+  for (const name of ['eth0', 'wlan0']) {
+    const addrs = interfaces[name];
+    if (!addrs) continue;
+    const ipv4 = addrs.find((a) => a.family === 'IPv4' && !a.internal);
     if (ipv4) return ipv4.address;
   }
 
@@ -155,6 +158,13 @@ function getDiskMetrics() {
   return null;
 }
 
+function normalizeTemperatureCelsius(rawValue) {
+  const value = parseInt(rawValue, 10);
+  if (Number.isNaN(value)) return null;
+  const celsius = value > 1000 ? value / 1000 : value;
+  return Math.round(celsius * 10) / 10;
+}
+
 function getTemperature() {
   const thermalPaths = [
     '/sys/class/thermal/thermal_zone0/temp',
@@ -164,7 +174,7 @@ function getTemperature() {
   for (const thermalPath of thermalPaths) {
     const raw = readFileIfExists(thermalPath);
     if (raw && /^\d+$/.test(raw)) {
-      return Math.round(parseInt(raw, 10) / 10) / 10;
+      return normalizeTemperatureCelsius(raw);
     }
   }
 

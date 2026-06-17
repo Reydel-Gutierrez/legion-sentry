@@ -71,6 +71,11 @@ export default function TopBar({ topBar }) {
               <span className="statusbar-label">Uptime</span>
               <span className="statusbar-value">{topBar.uptime}</span>
             </span>
+            {topBar.liveDataNote && (
+              <span className="statusbar-item statusbar-note">
+                <span className="statusbar-value">{topBar.liveDataNote}</span>
+              </span>
+            )}
           </div>
           <div className="statusbar-right">
             <span className="statusbar-label">Product</span>

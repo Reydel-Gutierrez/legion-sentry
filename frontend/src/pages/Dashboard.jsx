@@ -37,8 +37,12 @@ export default function DashboardPage() {
   if (error) return <div className="alert-sentry alert-sentry-error">{error}</div>;
   if (!data) return <div className="loading-state">Loading system status…</div>;
 
-  const { system, services, devices, recentEvents, interfaces, hostname, hardwareProfile, runtimeMode } = data;
+  const {
+    system, services, devices, recentEvents, interfaces, serial, hostname, hardwareProfile, runtimeMode, topBar,
+  } = data;
   const eth0 = interfaces?.eth0;
+  const wlan0 = interfaces?.wlan0;
+  const tempMax = 85;
 
   return (
     <>
@@ -46,6 +50,10 @@ export default function DashboardPage() {
         title="Dashboard"
         subtitle="Live hardware status, service configuration, and device overview"
       />
+
+      {topBar?.liveDataNote && (
+        <div className="alert-sentry alert-sentry-info mb-3">{topBar.liveDataNote}</div>
+      )}
 
       <Row className="g-3 mb-3">
         <Col sm={6} lg={3}>
@@ -90,6 +98,9 @@ export default function DashboardPage() {
             <ServiceStatusRow name={services.modbusTcp.name} status={services.modbusTcp.status} label={services.modbusTcp.label} />
             <ServiceStatusRow name={services.modbusRtu.name} status={services.modbusRtu.status} label={services.modbusRtu.label} />
             <ServiceStatusRow name={services.mqtt.name} status={services.mqtt.status} label={services.mqtt.label} />
+            {services.routing && (
+              <ServiceStatusRow name={services.routing.name} status={services.routing.status} label={services.routing.label} />
+            )}
           </PanelCard>
         </Col>
 
@@ -97,10 +108,53 @@ export default function DashboardPage() {
           <PanelCard title="System Health">
             <MetricBar label="CPU Load" value={system.cpuUsage} barClass="bar-cpu" />
             <MetricBar label="Memory" value={system.memoryUsage} barClass="bar-memory" />
-            <MetricBar label="Temperature" value={system.temperature} barClass="bar-temp" />
+            <MetricBar label="Temperature" value={system.temperature} barClass="bar-temp" unit="°C" max={tempMax} />
             <MetricBar label="Disk" value={system.storageUsage} barClass="bar-storage" />
             <KvRow label="Uptime" value={system.uptime} />
             <KvRow label="OS" value={system.os} />
+          </PanelCard>
+        </Col>
+      </Row>
+
+      <Row className="mt-0">
+        <Col lg={6}>
+          <PanelCard title="Network">
+            <KvRow
+              label="eth0"
+              value={(
+                <>
+                  <StatusBadge status={eth0?.status || 'not_present'} label={eth0?.status || 'not present'} />
+                  {eth0?.ip && <span className="mono" style={{ marginLeft: '0.5rem' }}>{eth0.ip}</span>}
+                </>
+              )}
+            />
+            <KvRow
+              label="wlan0"
+              value={(
+                <>
+                  <StatusBadge status={wlan0?.status || 'not_present'} label={wlan0?.status || 'not present'} />
+                  {wlan0?.ip && <span className="mono" style={{ marginLeft: '0.5rem' }}>{wlan0.ip}</span>}
+                </>
+              )}
+            />
+            <KvRow label="Primary IP" value={data.topBar?.ip || '—'} />
+          </PanelCard>
+        </Col>
+        <Col lg={6}>
+          <PanelCard title="Serial / RS485">
+            <KvRow label="Recommended Port" value={serial?.recommendedPort || '—'} />
+            <KvRow
+              label="Port Open Check"
+              value={(
+                <StatusBadge
+                  status={serial?.lastCheck?.success ? 'running' : serial?.lastCheck ? 'fault' : 'not_configured'}
+                  label={serial?.lastCheck?.success ? 'OK' : serial?.lastCheck ? 'Failed' : 'Not checked'}
+                />
+              )}
+            />
+            {serial?.lastCheck && (
+              <KvRow label="Last Check" value={`${serial.lastCheck.path} @ ${serial.lastCheck.baudRate} baud (${serial.lastCheck.responseTimeMs ?? '—'}ms)`} />
+            )}
           </PanelCard>
         </Col>
       </Row>
@@ -115,16 +169,8 @@ export default function DashboardPage() {
                 <KvRow label="Runtime Mode" value={<StatusBadge status={runtimeMode === 'REAL HARDWARE' ? 'real hardware' : 'development'} label={runtimeMode} />} />
               </Col>
               <Col md={6}>
-                <KvRow
-                  label="eth0"
-                  value={(
-                    <>
-                      <StatusBadge status={eth0?.status || 'not_present'} label={eth0?.status || 'not present'} />
-                      {eth0?.ip && <span className="mono" style={{ marginLeft: '0.5rem' }}>{eth0.ip}</span>}
-                    </>
-                  )}
-                />
-                <KvRow label="Primary IP" value={data.topBar?.ip || '—'} />
+                <KvRow label="Product Code" value={data.topBar?.productCode} />
+                <KvRow label="Firmware" value={data.identity?.firmwareVersion} />
               </Col>
             </Row>
           </PanelCard>

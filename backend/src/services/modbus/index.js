@@ -31,14 +31,10 @@ function saveModbusSettings(payload) {
 }
 
 function testReadRegister() {
-  return {
-    success: true,
-    unitId: 1,
-    register: 40001,
-    value: 72,
-    responseTimeMs: 38,
-    timestamp: new Date().toISOString(),
-  };
+  const error = new Error('Modbus read not implemented in DEV-1');
+  error.statusCode = 501;
+  error.code = 'NOT_IMPLEMENTED';
+  throw error;
 }
 
 function scanDevices() {

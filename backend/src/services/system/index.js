@@ -1,25 +1,80 @@
 const { DEVICE } = require('../../config');
 const hardwareMetrics = require('../../lib/hardwareMetrics');
+const { loadSettings } = require('../../lib/settingsStore');
+const { DEVICE_STATES } = require('../../lib/deviceStates');
 const deviceService = require('../devices');
+const serialService = require('../interfaces/serial.service');
 const logsService = require('../logs');
 
-const DISCOVERY_IMPLEMENTED = process.env.MOCK_DATA === 'true';
+function mapServiceState(enabled, configured) {
+  if (!enabled) return { status: DEVICE_STATES.DISABLED, label: 'Disabled' };
+  if (!configured) return { status: DEVICE_STATES.NOT_CONFIGURED, label: 'Not configured' };
+  return { status: DEVICE_STATES.READY, label: 'Ready' };
+}
 
 function getServiceStatuses() {
+  const settings = loadSettings();
+  const bacnet = settings.bacnet || {};
+  const modbus = settings.modbus || {};
+  const mqtt = settings.mqtt || {};
+
+  const bacnetIp = mapServiceState(bacnet.ip?.enabled, true);
+  const bacnetMstp = mapServiceState(bacnet.mstp?.enabled, bacnet.mstp?.serialPort);
+  const modbusTcp = mapServiceState(modbus.tcp?.enabled, true);
+  const modbusRtu = mapServiceState(modbus.rtu?.enabled, modbus.rtu?.serialPort);
+  const mqttState = mqtt.enabled
+    ? { status: DEVICE_STATES.READY, label: 'Ready' }
+    : { status: DEVICE_STATES.DISABLED, label: 'Disabled' };
+
   return {
-    bacnetIp: { name: 'BACnet/IP', status: 'not_configured', label: 'Not configured', port: null },
-    bacnetMstp: { name: 'BACnet MS/TP', status: 'not_configured', label: 'Not configured', port: null },
-    modbusTcp: { name: 'Modbus TCP', status: 'not_configured', label: 'Not configured', port: null },
-    modbusRtu: { name: 'Modbus RTU', status: 'not_configured', label: 'Not configured', port: null },
-    mqtt: { name: 'MQTT', status: 'disabled', label: 'Disabled', port: null },
+    bacnetIp: { name: 'BACnet/IP', ...bacnetIp, port: bacnet.ip?.udpPort || null },
+    bacnetMstp: { name: 'BACnet MS/TP', ...bacnetMstp, port: bacnet.mstp?.serialPort || null },
+    modbusTcp: { name: 'Modbus TCP', ...modbusTcp, port: modbus.tcp?.port || null },
+    modbusRtu: { name: 'Modbus RTU', ...modbusRtu, port: modbus.rtu?.serialPort || null },
+    mqtt: { name: 'MQTT', ...mqttState, port: mqtt.port || null },
+    routing: {
+      name: 'BACnet Routing',
+      status: DEVICE_STATES.NOT_CONFIGURED,
+      label: 'Not implemented',
+      port: null,
+    },
+  };
+}
+
+function getSerialStatus() {
+  const detail = serialService.getSerialDetail();
+  const recommended = detail.ports.find((p) => p.recommendedForRs485 && p.exists)
+    || detail.ports.find((p) => p.exists);
+  const lastCheck = serialService.getLastOpenCheck();
+
+  return {
+    recommendedPort: recommended?.path || null,
+    portOpen: lastCheck?.success === true,
+    lastCheck,
+    ports: detail.ports,
+  };
+}
+
+function getNetworkStatusSummary() {
+  const interfaces = hardwareMetrics.getNetworkInterfaces();
+  const wlan = interfaces.find((i) => i.name === 'wlan0');
+  const eth = interfaces.find((i) => i.name === 'eth0');
+
+  return {
+    eth0: eth,
+    wlan0: wlan,
+    primaryIp: hardwareMetrics.getPrimaryIpv4(),
   };
 }
 
 function getSystemStatus() {
   const hardware = hardwareMetrics.getHardwareStatus();
-  const eth0 = hardwareMetrics.getNetworkInterfaces().find((iface) => iface.name === 'eth0');
+  const network = getNetworkStatusSummary();
+  const eth0 = network.eth0;
+  const wlan0 = network.wlan0;
   const eth0Ipv4 = eth0?.addresses?.find((a) => a.family === 'IPv4');
-  const primaryIp = eth0Ipv4?.address || hardwareMetrics.getPrimaryIpv4();
+  const wlan0Ipv4 = wlan0?.addresses?.find((a) => a.family === 'IPv4');
+  const primaryIp = eth0Ipv4?.address || wlan0Ipv4?.address || network.primaryIp;
 
   return {
     ...hardware,
@@ -47,11 +102,19 @@ function getSystemStatus() {
         ip: eth0Ipv4?.address || null,
         operstate: eth0?.operstate || null,
       },
+      wlan0: {
+        name: 'wlan0',
+        status: wlan0?.status || 'not_present',
+        ip: wlan0Ipv4?.address || null,
+        operstate: wlan0?.operstate || null,
+      },
     },
+    serial: getSerialStatus(),
+    network: network,
     services: getServiceStatuses(),
     devices: deviceService.getDashboardSummary(),
     recentEvents: logsService.getLogs('all').slice(0, 6),
-    discoveryImplemented: DISCOVERY_IMPLEMENTED,
+    discoveryImplemented: deviceService.isDiscoveryImplemented('bacnet-ip'),
     topBar: {
       productName: DEVICE.product,
       productCode: DEVICE.productCode,
@@ -59,6 +122,9 @@ function getSystemStatus() {
       ip: primaryIp || '—',
       uptime: hardware.uptime.formatted,
       runtimeMode: hardware.runtimeMode,
+      liveDataNote: hardware.runtimeMode === 'REAL HARDWARE'
+        ? 'Live data from this Sentry device'
+        : null,
     },
   };
 }
@@ -95,6 +161,7 @@ function getSystemInfo() {
     temperature: hardware.temperature,
     uptime: hardware.uptime.formatted,
     runtimeMode: hardware.runtimeMode,
+    serial: getSerialStatus(),
   };
 }
 

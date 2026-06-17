@@ -28,6 +28,15 @@ export const api = {
   getDevice: (id) => request(`/devices/${id}`),
   getDeviceHealth: (id) => request(`/devices/${id}/health`),
   getDeviceObjects: (id) => request(`/devices/${id}/objects`),
+  deleteDevice: (id) => request(`/devices/${id}`, { method: 'DELETE' }),
+  discoverBacnetIp: (timeoutMs = 5000) => request('/bacnet/ip/discover', {
+    method: 'POST',
+    body: JSON.stringify({ timeoutMs }),
+  }),
+  readBacnetDevice: (address, deviceInstance) => request('/bacnet/ip/read-device', {
+    method: 'POST',
+    body: JSON.stringify({ address, deviceInstance }),
+  }),
   discoverDevices: (protocol = 'all') => request('/devices/discover', { method: 'POST', body: JSON.stringify({ protocol }) }),
   refreshDevices: () => request('/devices/refresh', { method: 'POST' }),
   getBacnetStatus: () => request('/bacnet/status'),
@@ -44,5 +53,8 @@ export const api = {
   getLogs: (filter = 'all') => request(`/logs?filter=${filter}`),
   clearLogs: () => request('/logs/clear', { method: 'POST' }),
   getSerialInterfaces: () => request('/interfaces/serial'),
+  getSerialDetail: () => request('/interfaces/serial/detail'),
+  configureSerial: (data) => request('/interfaces/serial/configure', { method: 'POST', body: JSON.stringify(data) }),
+  openSerialCheck: (data) => request('/interfaces/serial/open-check', { method: 'POST', body: JSON.stringify(data) }),
   getNetworkInterfaces: () => request('/interfaces/network'),
 };

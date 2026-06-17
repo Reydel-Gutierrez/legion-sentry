@@ -17,6 +17,8 @@
     "express": "^4.21.2",
     "helmet": "^7.1.0",
     "legion-sentry": "file:..",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "node-bacnet": "^0.2.4",
+    "serialport": "^12.0.0"
   }
 }

@@ -8,6 +8,20 @@ router.get('/', (_req, res) => {
   res.json(deviceService.getDevices());
 });
 
+router.post('/refresh', async (_req, res, next) => {
+  try {
+    const result = await deviceService.refreshDevices();
+    logsService.addLog({
+      level: 'info',
+      service: 'bacnet',
+      message: `Device health refresh complete — ${result.devices.length} devices checked, ${result.summary?.online ?? 0} online`,
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/discover', (req, res, next) => {
   try {
     const protocol = req.body?.protocol || 'all';
@@ -24,15 +38,14 @@ router.post('/discover', (req, res, next) => {
   }
 });
 
-router.post('/refresh', (_req, res) => {
-  const result = deviceService.refreshDevices();
-  if (result.scanned && result.devices.length > 0) {
-    logsService.addLog({
-      level: 'info',
-      service: 'bacnet',
-      message: `Device list refreshed — ${result.devices.length} devices`,
-    });
-  }
+router.delete('/:id', (req, res) => {
+  const result = deviceService.deleteDevice(req.params.id);
+  if (!result) return res.status(404).json({ error: 'Device not found' });
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: `Device removed from inventory — instance ${result.removed.deviceInstance}`,
+  });
   res.json(result);
 });
 

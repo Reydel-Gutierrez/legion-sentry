@@ -26,29 +26,17 @@ function saveMqttSettings(payload) {
 }
 
 function testConnection() {
-  const settings = loadSettings().mqtt;
-  return {
-    success: settings.enabled,
-    broker: `${settings.brokerUrl}:${settings.port}`,
-    tls: settings.tlsEnabled,
-    latencyMs: settings.enabled ? 56 : null,
-    message: settings.enabled
-      ? 'MQTT broker connection test succeeded (simulated).'
-      : 'MQTT client is disabled. Enable it before testing.',
-  };
+  const error = new Error('MQTT broker test not implemented in DEV-1');
+  error.statusCode = 501;
+  error.code = 'NOT_IMPLEMENTED';
+  throw error;
 }
 
 function publishTestMessage() {
-  const settings = loadSettings().mqtt;
-  const topic = settings.topics.telemetry;
-  return {
-    success: settings.enabled,
-    topic,
-    payload: { temperature: 22.4, status: 'ok', ts: new Date().toISOString() },
-    message: settings.enabled
-      ? `Test message published to ${topic} (simulated).`
-      : 'MQTT client is disabled.',
-  };
+  const error = new Error('MQTT publish not implemented in DEV-1');
+  error.statusCode = 501;
+  error.code = 'NOT_IMPLEMENTED';
+  throw error;
 }
 
 module.exports = {

@@ -7,6 +7,7 @@ import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
 
 function formatLastSeen(iso) {
+  if (!iso) return '—';
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 60000) return 'Just now';
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
@@ -35,9 +36,10 @@ export default function DevicesPage() {
       const result = await api.refreshDevices();
       setDevices(result.devices);
       if (result.devices.length === 0) {
-        setMessage({ type: 'info', text: 'No devices discovered yet.' });
+        setMessage({ type: 'info', text: 'No devices in inventory. Run BACnet/IP discovery first.' });
       } else {
-        setMessage({ type: 'success', text: 'Device list refreshed.' });
+        const online = result.summary?.online ?? result.devices.filter((d) => d.status === 'online').length;
+        setMessage({ type: 'success', text: `Health refresh complete — ${online} of ${result.devices.length} online.` });
       }
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
@@ -46,17 +48,38 @@ export default function DevicesPage() {
     }
   };
 
-  const handleDiscover = async (protocol) => {
+  const handleDiscoverIp = async () => {
     setLoading(true);
     setMessage(null);
     try {
-      const result = await api.discoverDevices(protocol);
-      setDevices(result.devices);
-      const label = protocol === 'bacnet-ip' ? 'BACnet/IP' : 'BACnet MS/TP';
-      setMessage({
-        type: 'success',
-        text: `${label} discovery complete — ${result.devicesFound} devices found in ${result.durationMs}ms.`,
-      });
+      const result = await api.discoverBacnetIp(5000);
+      const inventory = result.inventory || {};
+      setDevices(inventory.devices || []);
+      const found = result.devices?.length ?? inventory.devicesFound ?? 0;
+      if (found === 0) {
+        setMessage({ type: 'info', text: 'No BACnet/IP devices discovered.' });
+      } else {
+        setMessage({
+          type: 'success',
+          text: `BACnet/IP discovery complete — ${found} device(s) found in ${result.durationMs}ms.`,
+        });
+      }
+      load();
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (e, id) => {
+    e.stopPropagation();
+    if (!window.confirm('Remove this device from inventory?')) return;
+    setLoading(true);
+    try {
+      await api.deleteDevice(id);
+      load();
+      setMessage({ type: 'success', text: 'Device removed from inventory.' });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -68,7 +91,7 @@ export default function DevicesPage() {
     <>
       <PageHeader
         title="Devices"
-        subtitle="Discover and monitor BACnet/IP and MS/TP devices on connected networks"
+        subtitle="Discover and monitor BACnet/IP devices on connected networks"
       />
 
       {message && (
@@ -77,7 +100,7 @@ export default function DevicesPage() {
         </div>
       )}
 
-      <PanelCard title={`Discovered Devices (${devices.length})`}>
+      <PanelCard title={`Device Inventory (${devices.length})`}>
         <Table responsive className="sentry-table mb-0">
           <thead>
             <tr>
@@ -89,13 +112,14 @@ export default function DevicesPage() {
               <th>Address</th>
               <th>Network</th>
               <th>Last Seen</th>
+              <th />
             </tr>
           </thead>
           <tbody>
             {devices.length === 0 ? (
               <tr>
-                <td colSpan={8} style={{ textAlign: 'center', color: '#58677d' }}>
-                  No devices discovered yet
+                <td colSpan={9} style={{ textAlign: 'center', color: '#58677d' }}>
+                  No devices discovered yet. Run BACnet/IP discovery to scan the local network.
                 </td>
               </tr>
             ) : (
@@ -106,16 +130,26 @@ export default function DevicesPage() {
                   onClick={() => navigate(`/devices/${device.id}`)}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => e.key === 'Enter' && navigate(`/devices/${device.id}`)}
+                  onKeyDown={(k) => k.key === 'Enter' && navigate(`/devices/${device.id}`)}
                 >
                   <td><StatusBadge status={device.status} label={device.status} /></td>
                   <td>{device.deviceInstance}</td>
-                  <td>{device.objectName}</td>
-                  <td>{device.vendor}</td>
-                  <td>{device.model}</td>
+                  <td>{device.objectName || '—'}</td>
+                  <td>{device.vendor || device.vendorName || '—'}</td>
+                  <td>{device.model || device.modelName || '—'}</td>
                   <td className="mono">{device.address}</td>
                   <td>{device.network}</td>
-                  <td>{formatLastSeen(device.lastSeen)}</td>
+                  <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn-sentry-secondary btn-sm"
+                      onClick={(e) => handleDelete(e, device.id)}
+                      disabled={loading}
+                    >
+                      Remove
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
@@ -125,13 +159,13 @@ export default function DevicesPage() {
 
       <div className="action-bar">
         <button type="button" className="btn btn-sentry-secondary" onClick={handleRefresh} disabled={loading}>
-          Refresh
+          Refresh Health
         </button>
-        <button type="button" className="btn btn-sentry-primary" onClick={() => handleDiscover('bacnet-ip')} disabled={loading}>
+        <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverIp} disabled={loading}>
           Discover BACnet/IP
         </button>
-        <button type="button" className="btn btn-sentry-primary" onClick={() => handleDiscover('bacnet-mstp')} disabled={loading}>
-          Discover BACnet MS/TP
+        <button type="button" className="btn btn-sentry-secondary" disabled title="BACnet MS/TP discovery not implemented yet">
+          BACnet MS/TP discovery not implemented yet
         </button>
       </div>
     </>

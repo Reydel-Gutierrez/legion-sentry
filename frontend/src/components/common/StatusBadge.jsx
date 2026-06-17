@@ -16,6 +16,8 @@ const STATUS_MAP = {
   fault: 'fault',
   idle: 'running',
   not_configured: 'stopped',
+  not_implemented: 'stopped',
+  ready: 'running',
   disabled: 'stopped',
   not_present: 'stopped',
   'real hardware': 'hardware',

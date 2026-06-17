@@ -30,7 +30,7 @@
     },
     "mstp": {
       "enabled": true,
-      "serialPort": "/dev/ttyAMA0",
+      "serialPort": "/dev/serial0",
       "macAddress": 5,
       "baudRate": 38400,
       "maxMaster": 127,

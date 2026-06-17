@@ -291,6 +291,13 @@ body {
   gap: 0.4rem;
 }
 
+.statusbar-note .statusbar-value {
+  color: $text-muted;
+  font-family: inherit;
+  font-style: italic;
+  font-size: 0.72rem;
+}
+
 .statusbar-label {
   color: $text-muted;
 }

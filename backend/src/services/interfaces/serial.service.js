@@ -24,6 +24,122 @@ const monitorState = {
   port: null,
 };
 
+let processCleanupRegistered = false;
+let monitorFaultCleanupInProgress = false;
+
+function logSerial(message, level = 'info') {
+  const logFn = level === 'error' ? console.error : console.log;
+  logFn(`[serial] ${message}`);
+}
+
+function attachPortErrorListener(port, context = 'serial') {
+  if (!port || port.__legionSerialErrorBound) return;
+  port.__legionSerialErrorBound = true;
+  port.on('error', (err) => {
+    const message = err?.message || String(err);
+    if (context === 'monitor') {
+      monitorState.lastError = message;
+      logSerial(`serial monitor fault: ${message}`, 'error');
+      scheduleMonitorFaultCleanup();
+      return;
+    }
+    logSerial(`${context} fault: ${message}`, 'error');
+  });
+}
+
+function safeClosePort(port) {
+  return new Promise((resolve) => {
+    if (!port) {
+      resolve(null);
+      return;
+    }
+
+    if (!port.isOpen) {
+      logSerial('serial close skipped because port not open');
+      resolve(null);
+      return;
+    }
+
+    try {
+      port.close((closeErr) => {
+        if (closeErr) {
+          logSerial(`serial close failed: ${closeErr.message}`, 'error');
+        }
+        resolve(closeErr || null);
+      });
+    } catch (err) {
+      logSerial(`serial close failed: ${err.message}`, 'error');
+      resolve(err);
+    }
+  });
+}
+
+async function detachAndDestroyPort(port) {
+  if (!port) return;
+
+  try {
+    port.removeAllListeners();
+  } catch {
+    // ignore listener cleanup failures
+  }
+
+  await safeClosePort(port);
+}
+
+function resetMonitorState() {
+  monitorState.running = false;
+  monitorState.path = null;
+  monitorState.baudRate = null;
+  monitorState.rxBytes = 0;
+  monitorState.txBytes = 0;
+  monitorState.lastActivityAt = null;
+  monitorState.lastError = null;
+  monitorState.startedAt = null;
+  monitorState.port = null;
+}
+
+function registerProcessCleanup() {
+  if (processCleanupRegistered) return;
+  processCleanupRegistered = true;
+
+  const cleanup = () => {
+    try {
+      const port = monitorState.port;
+      if (port && port.isOpen) {
+        try {
+          port.close(() => {});
+        } catch {
+          // ignore close failures during process shutdown
+        }
+      }
+    } catch {
+      // ignore cleanup failures during process shutdown
+    } finally {
+      monitorState.port = null;
+      monitorState.running = false;
+    }
+  };
+
+  process.once('SIGINT', cleanup);
+  process.once('SIGTERM', cleanup);
+  process.once('beforeExit', cleanup);
+}
+
+function scheduleMonitorFaultCleanup() {
+  if (monitorFaultCleanupInProgress || !monitorState.running) return;
+  monitorFaultCleanupInProgress = true;
+
+  setImmediate(() => {
+    stopMonitorInternal()
+      .catch((err) => {
+        logSerial(`serial monitor fault cleanup failed: ${err.message}`, 'error');
+      })
+      .finally(() => {
+        monitorFaultCleanupInProgress = false;
+      });
+  });
+}
+
 function pathExists(devicePath) {
   try {
     fs.accessSync(devicePath, fs.constants.F_OK);
@@ -152,13 +268,20 @@ function configureSerial({ path: devicePath, baudRate }) {
   };
 }
 
+function createSerialError(message, statusCode = 500, code = 'SERIAL_ERROR') {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
+
 function openSerialCheck({ path: devicePath, baudRate }) {
   validatePath(devicePath);
   const rate = validateBaudRate(baudRate);
   const startedAt = Date.now();
 
-  return new Promise((resolve, reject) => {
-    let port;
+  return new Promise((resolve) => {
+    let port = null;
     let settled = false;
 
     const finish = (result) => {
@@ -176,12 +299,14 @@ function openSerialCheck({ path: devicePath, baudRate }) {
     const fail = (err) => {
       if (settled) return;
       settled = true;
+      const message = err?.message || String(err);
+      logSerial(`serial open failed: ${message}`, 'error');
       const result = {
         success: false,
         path: devicePath,
         baudRate: rate,
         responseTimeMs: Date.now() - startedAt,
-        error: err.message,
+        error: message,
         checkedAt: new Date().toISOString(),
       };
       lastOpenCheck = result;
@@ -194,32 +319,43 @@ function openSerialCheck({ path: devicePath, baudRate }) {
         baudRate: rate,
         autoOpen: false,
       });
+      attachPortErrorListener(port, 'open-check');
+    } catch (err) {
+      fail(err);
+      return;
+    }
 
-      port.open((openErr) => {
+    try {
+      port.open(async (openErr) => {
         const responseTimeMs = Date.now() - startedAt;
+
         if (openErr) {
-          try { port.close(); } catch { /* ignore */ }
+          await detachAndDestroyPort(port);
           fail(openErr);
           return;
         }
 
-        port.close((closeErr) => {
-          if (closeErr) {
-            fail(closeErr);
-            return;
-          }
-          finish({
-            success: true,
-            path: devicePath,
-            baudRate: rate,
-            responseTimeMs,
-            error: null,
-            checkedAt: new Date().toISOString(),
-          });
+        await safeClosePort(port);
+
+        try {
+          port.removeAllListeners();
+        } catch {
+          // ignore listener cleanup failures
+        }
+
+        finish({
+          success: true,
+          path: devicePath,
+          baudRate: rate,
+          responseTimeMs,
+          error: null,
+          checkedAt: new Date().toISOString(),
         });
       });
     } catch (err) {
-      fail(err);
+      detachAndDestroyPort(port)
+        .catch(() => {})
+        .finally(() => fail(err));
     }
   });
 }
@@ -245,63 +381,81 @@ function getMonitorStatus() {
   };
 }
 
-function stopMonitorInternal() {
-  return new Promise((resolve) => {
-    if (!monitorState.port) {
-      monitorState.running = false;
-      resolve(getMonitorStatus());
-      return;
-    }
+async function stopMonitorInternal() {
+  const port = monitorState.port;
+  const previousStatus = getMonitorStatus();
 
-    const port = monitorState.port;
-    monitorState.port = null;
-    monitorState.running = false;
+  monitorState.port = null;
+  monitorState.running = false;
 
-    port.close(() => {
-      resolve(getMonitorStatus());
-    });
-  });
+  if (!port) {
+    return previousStatus;
+  }
+
+  try {
+    await safeClosePort(port);
+  } catch (err) {
+    logSerial(`serial monitor stop cleanup failed: ${err.message}`, 'error');
+  }
+
+  try {
+    port.removeAllListeners();
+  } catch {
+    // ignore listener cleanup failures
+  }
+
+  logSerial('serial monitor stopped');
+  return getMonitorStatus();
 }
 
 function startSerialMonitor({ path: devicePath, baudRate }) {
   if (monitorState.running) {
-    const error = new Error('Serial monitor is already running');
-    error.statusCode = 409;
-    error.code = 'MONITOR_RUNNING';
-    throw error;
+    throw createSerialError('Serial monitor is already running', 409, 'MONITOR_RUNNING');
   }
 
   if (os.platform() === 'win32') {
-    const error = new Error('Serial monitor is not supported on Windows development hosts');
-    error.statusCode = 501;
-    error.code = 'UNSUPPORTED_PLATFORM';
-    throw error;
+    throw createSerialError(
+      'Serial monitor is not supported on Windows development hosts',
+      501,
+      'UNSUPPORTED_PLATFORM',
+    );
   }
 
   validatePath(devicePath);
   const rate = validateBaudRate(baudRate);
 
   return new Promise((resolve, reject) => {
+    let port = null;
+
+    const failStart = async (err, statusCode = 500, code = 'MONITOR_OPEN_FAILED') => {
+      await detachAndDestroyPort(port);
+      port = null;
+      resetMonitorState();
+      logSerial(`serial open failed: ${err?.message || String(err)}`, 'error');
+      reject(createSerialError(err?.message || String(err), statusCode, code));
+    };
+
     try {
-      const port = new SerialPort({
+      port = new SerialPort({
         path: devicePath,
         baudRate: rate,
         autoOpen: false,
       });
+      attachPortErrorListener(port, 'monitor');
 
       port.on('data', (data) => {
         monitorState.rxBytes += data.length;
         monitorState.lastActivityAt = new Date().toISOString();
       });
+    } catch (err) {
+      failStart(err);
+      return;
+    }
 
-      port.on('error', (err) => {
-        monitorState.lastError = err.message;
-      });
-
+    try {
       port.open((openErr) => {
         if (openErr) {
-          monitorState.lastError = openErr.message;
-          reject(openErr);
+          failStart(openErr);
           return;
         }
 
@@ -314,19 +468,36 @@ function startSerialMonitor({ path: devicePath, baudRate }) {
         monitorState.lastError = null;
         monitorState.startedAt = new Date().toISOString();
         monitorState.port = port;
+        registerProcessCleanup();
         resolve(getMonitorStatus());
       });
     } catch (err) {
-      reject(err);
+      failStart(err);
     }
   });
 }
 
 async function stopSerialMonitor() {
-  if (!monitorState.running) {
-    return getMonitorStatus();
+  if (!monitorState.running && !monitorState.port) {
+    return {
+      ...getMonitorStatus(),
+      running: false,
+      message: 'Serial monitor is not running',
+    };
   }
-  return stopMonitorInternal();
+
+  try {
+    return await stopMonitorInternal();
+  } catch (err) {
+    logSerial(`serial monitor fault: ${err.message}`, 'error');
+    resetMonitorState();
+    return {
+      ...getMonitorStatus(),
+      running: false,
+      message: 'Serial monitor stopped after fault',
+      error: err.message,
+    };
+  }
 }
 
 module.exports = {

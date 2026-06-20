@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Form } from 'react-bootstrap';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { BRANDING } from '../config/branding';
+import BrandIdentity from '../components/common/BrandIdentity';
 
 export default function LoginPage() {
   const { login, isAuthenticated, loading } = useAuth();
@@ -37,11 +37,7 @@ export default function LoginPage() {
     <div className="login-page">
       <div className="login-card">
         <div className="login-brand">
-          <div className="login-brand-text">
-            <div className="brand-logo">{BRANDING.manufacturer}</div>
-            <div className="brand-product">{BRANDING.productName}</div>
-            <div className="brand-code">{BRANDING.productCode}</div>
-          </div>
+          <BrandIdentity size="login" textClassName="login-brand-text" className="brand-identity--login" />
         </div>
 
         <div className="login-header">

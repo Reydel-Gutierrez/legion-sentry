@@ -738,6 +738,38 @@ body {
 .login-brand {
   padding-bottom: 1.25rem;
   border-bottom: 1px solid $panel-border;
+
+  .brand-identity--login {
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 1rem;
+  }
+
+  .login-brand-text {
+    .brand-logo {
+      font-size: 0.65rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: $accent;
+      font-weight: 600;
+      margin-bottom: 0.15rem;
+    }
+
+    .brand-product {
+      font-size: 1.15rem;
+      font-weight: 600;
+      color: $text-white;
+      line-height: 1.2;
+    }
+
+    .brand-code {
+      font-size: 0.68rem;
+      color: $text-muted;
+      font-family: $font-mono;
+      margin-top: 0.25rem;
+    }
+  }
 }
 
 .login-header {

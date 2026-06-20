@@ -5,6 +5,7 @@ import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
+import LoadingState from '../components/common/LoadingState';
 
 function InterfaceConfigForm({ ifaceName, config, onChange, disabled }) {
   const isDhcp = config.mode === 'dhcp';
@@ -192,7 +193,7 @@ export default function NetworkPage() {
     }
   };
 
-  if (!form || !data) return <div className="loading-state">Loading network configuration…</div>;
+  if (!form || !data) return <LoadingState message="Loading network configuration…" />;
 
   const liveInterfaces = data.live?.interfaces || [];
   const applyStatus = data.applyStatus || data.saved?.applyStatus || 'none';

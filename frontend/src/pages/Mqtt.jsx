@@ -5,6 +5,7 @@ import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
+import LoadingState from '../components/common/LoadingState';
 
 export default function MqttPage() {
   const [data, setData] = useState(null);
@@ -73,7 +74,7 @@ export default function MqttPage() {
     }
   };
 
-  if (!form || !data) return <div className="loading-state">Loading MQTT configuration…</div>;
+  if (!form || !data) return <LoadingState message="Loading MQTT configuration…" />;
 
   return (
     <>

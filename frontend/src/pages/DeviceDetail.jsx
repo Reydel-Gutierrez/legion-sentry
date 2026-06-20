@@ -6,6 +6,7 @@ import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
+import LoadingState from '../components/common/LoadingState';
 
 function formatLastSeen(iso) {
   if (!iso) return '—';
@@ -56,7 +57,7 @@ export default function DeviceDetailPage() {
   }, [id]);
 
   if (error) return <div className="alert-sentry alert-sentry-error">{error}</div>;
-  if (!device) return <div className="loading-state">Loading device details…</div>;
+  if (!device) return <LoadingState message="Loading device details…" />;
 
   const summary = objects?.objectSummary || {};
   const details = bacnetDetails || {};

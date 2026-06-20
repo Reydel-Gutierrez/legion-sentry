@@ -8,6 +8,7 @@ import PanelCard from '../components/common/PanelCard';
 import ServiceStatusRow from '../components/common/ServiceStatusRow';
 import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
+import LoadingState from '../components/common/LoadingState';
 
 function formatTimestamp(iso) {
   return new Date(iso).toLocaleString();
@@ -35,7 +36,7 @@ export default function DashboardPage() {
   }, []);
 
   if (error) return <div className="alert-sentry alert-sentry-error">{error}</div>;
-  if (!data) return <div className="loading-state">Loading system status…</div>;
+  if (!data) return <LoadingState message="Loading system status…" />;
 
   const {
     system, services, devices, recentEvents, interfaces, serial, hostname, hardwareProfile, runtimeMode, topBar,

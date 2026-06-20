@@ -6,6 +6,7 @@ import KvRow from '../components/common/KvRow';
 import MetricBar from '../components/common/MetricBar';
 import PanelCard from '../components/common/PanelCard';
 import PageHeader from '../components/common/PageHeader';
+import LoadingState from '../components/common/LoadingState';
 
 export default function SystemPage() {
   const { refreshSession } = useAuth();
@@ -50,7 +51,7 @@ export default function SystemPage() {
     }
   };
 
-  if (!info) return <div className="loading-state">Loading system information…</div>;
+  if (!info) return <LoadingState message="Loading system information…" />;
 
   return (
     <>

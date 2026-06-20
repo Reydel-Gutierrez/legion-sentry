@@ -5,6 +5,7 @@ import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
+import LoadingState from '../components/common/LoadingState';
 
 const BAUD_RATES = [9600, 19200, 38400, 76800, 115200];
 const PARITY_OPTIONS = ['none', 'even', 'odd'];
@@ -59,7 +60,7 @@ export default function ModbusPage() {
     }
   };
 
-  if (!form || !data) return <div className="loading-state">Loading Modbus configuration…</div>;
+  if (!form || !data) return <LoadingState message="Loading Modbus configuration…" />;
 
   return (
     <>

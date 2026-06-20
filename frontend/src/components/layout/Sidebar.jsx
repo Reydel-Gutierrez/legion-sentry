@@ -1,4 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom';
+import BrandIdentity from '../common/BrandIdentity';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', end: true, icon: 'dashboard' },
@@ -70,12 +71,7 @@ export default function Sidebar() {
   return (
     <aside className="app-sidebar">
       <div className="sidebar-brand">
-        <div className="brand-mark">LC</div>
-        <div className="brand-text">
-          <div className="brand-logo">Legion Controls</div>
-          <div className="brand-product">Sentry G1</div>
-          <div className="brand-code">LCG1DEV10026</div>
-        </div>
+        <BrandIdentity size="sidebar" />
       </div>
 
       <nav className="sidebar-nav">

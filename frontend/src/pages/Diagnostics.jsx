@@ -6,6 +6,7 @@ import MetricBar from '../components/common/MetricBar';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
+import LoadingState from '../components/common/LoadingState';
 
 function formatTimestamp(iso) {
   if (!iso) return '—';
@@ -126,7 +127,7 @@ export default function DiagnosticsPage() {
       .finally(() => setLoading(false));
   };
 
-  if (!data) return <div className="loading-state">Loading diagnostics…</div>;
+  if (!data) return <LoadingState message="Loading diagnostics…" />;
 
   const { hardware, network, serial, bacnet, modbus, gpio, recentSerialLogs } = data;
   const recommended = serialDetail?.ports?.find((p) => p.recommendedForRs485 && p.exists)

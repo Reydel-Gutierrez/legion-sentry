@@ -1,10 +1,14 @@
+import { BRANDING } from '../../config/branding';
+import SentryLogo from '../common/SentryLogo';
+
 export default function Footer({ topBar }) {
   return (
     <footer className="app-footer">
       <div className="footer-left">
-        <span>© Legion Controls</span>
+        <SentryLogo size="compact" className="footer-logo" />
+        <span>© {BRANDING.manufacturer}</span>
         <span className="footer-sep">·</span>
-        <span className="footer-muted">Sentry G1</span>
+        <span className="footer-muted">{BRANDING.productName}</span>
       </div>
       <div className="footer-center">
         <span className="footer-muted">Firmware</span>
@@ -18,7 +22,7 @@ export default function Footer({ topBar }) {
         )}
       </div>
       <div className="footer-right">
-        <span className="footer-muted">LCG1DEV10026</span>
+        <span className="footer-muted">{BRANDING.productCode}</span>
       </div>
     </footer>
   );

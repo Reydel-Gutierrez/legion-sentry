@@ -5,6 +5,7 @@ import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
+import LoadingState from '../components/common/LoadingState';
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 76800, 115200];
 
@@ -121,7 +122,7 @@ export default function BacnetPage() {
     }
   };
 
-  if (!form || !data) return <div className="loading-state">Loading BACnet configuration…</div>;
+  if (!form || !data) return <LoadingState message="Loading BACnet configuration…" />;
 
   const recommendedPort = serialDetail?.ports?.find((p) => p.recommendedForRs485 && p.exists);
   const lastSerialCheck = data.mstp.lastSerialCheck || serialDetail?.lastOpenCheck;

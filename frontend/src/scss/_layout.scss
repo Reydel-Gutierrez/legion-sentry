@@ -47,27 +47,15 @@ body {
 }
 
 .sidebar-brand {
+  padding: 1.1rem 1.15rem;
+  border-bottom: 1px solid $panel-border;
+}
+
+.brand-identity {
   display: flex;
   align-items: center;
   gap: 0.85rem;
-  padding: 1.1rem 1.15rem;
-  border-bottom: 1px solid $panel-border;
-
-  .brand-mark {
-    width: 40px;
-    height: 40px;
-    border-radius: $radius-md;
-    background: linear-gradient(135deg, $accent-deep 0%, $accent 100%);
-    color: #1a1200;
-    font-weight: 800;
-    font-size: 0.8rem;
-    letter-spacing: 0.04em;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-  }
+  min-width: 0;
 
   .brand-logo {
     font-size: 0.65rem;
@@ -91,6 +79,13 @@ body {
     font-family: $font-mono;
     margin-top: 0.1rem;
   }
+}
+
+.sentry-logo {
+  display: block;
+  flex-shrink: 0;
+  object-fit: contain;
+  width: auto;
 }
 
 .sidebar-nav {
@@ -213,6 +208,13 @@ body {
   flex-shrink: 0;
 }
 
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
 .topbar-breadcrumb {
   display: flex;
   align-items: center;
@@ -278,11 +280,20 @@ body {
   font-size: 0.75rem;
 }
 
-.statusbar-left,
-.statusbar-right {
+.statusbar-left {
   display: flex;
   align-items: center;
   gap: 1.1rem;
+}
+
+.statusbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+
+  .statusbar-logo {
+    opacity: 0.95;
+  }
 }
 
 .statusbar-item {
@@ -395,12 +406,33 @@ body {
 
 .page-header-main {
   .page-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .page-eyebrow-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+    line-height: 1.2;
+  }
+
+  .page-eyebrow-manufacturer {
     font-size: 0.65rem;
     font-weight: 600;
     letter-spacing: 0.14em;
     text-transform: uppercase;
     color: $accent;
-    margin-bottom: 0.35rem;
+  }
+
+  .page-eyebrow-product {
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: $text-secondary;
+    text-transform: none;
   }
 
   h1 {
@@ -853,50 +885,8 @@ body {
 }
 
 .login-brand {
-  display: flex;
-  align-items: center;
-  gap: 0.85rem;
   padding-bottom: 1.25rem;
   border-bottom: 1px solid $panel-border;
-
-  .brand-mark {
-    width: 42px;
-    height: 42px;
-    border-radius: $radius-sm;
-    background: $panel-deep;
-    border: 1px solid $accent-border;
-    color: $accent;
-    font-weight: 700;
-    font-size: 0.8rem;
-    letter-spacing: 0.04em;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .brand-logo {
-    font-size: 0.65rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: $accent;
-    font-weight: 600;
-    margin-bottom: 0.1rem;
-  }
-
-  .brand-product {
-    font-size: 1.05rem;
-    font-weight: 600;
-    color: $text-white;
-    line-height: 1.2;
-  }
-
-  .brand-code {
-    font-size: 0.68rem;
-    color: $text-muted;
-    font-family: $font-mono;
-    margin-top: 0.1rem;
-  }
 }
 
 .login-header {
@@ -989,10 +979,19 @@ body {
 }
 
 .loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.85rem;
   color: $text-muted;
   padding: 3rem 2rem;
   text-align: center;
   font-size: 0.85rem;
+
+  p {
+    margin: 0;
+  }
 }
 
 .section-grid {

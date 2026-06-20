@@ -1,5 +1,7 @@
-import { NavLink, useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
+import { BRANDING } from '../../config/branding';
+import SentryLogo from '../common/SentryLogo';
 import StatusBadge from '../common/StatusBadge';
 
 const ROUTE_LABELS = {
@@ -16,7 +18,7 @@ const ROUTE_LABELS = {
 
 function getPageLabel(pathname) {
   if (pathname.startsWith('/devices/')) return 'Device Details';
-  return ROUTE_LABELS[pathname] || 'Sentry G1';
+  return ROUTE_LABELS[pathname] || BRANDING.productName;
 }
 
 function runtimeBadgeProps(runtimeMode) {
@@ -41,8 +43,9 @@ export default function TopBar({ topBar }) {
     <>
       <header className="app-topbar">
         <div className="topbar-left">
+          <SentryLogo size="header" className="topbar-logo" />
           <nav className="topbar-breadcrumb" aria-label="Breadcrumb">
-            <span className="breadcrumb-device">{topBar?.hostname || 'Sentry G1'}</span>
+            <span className="breadcrumb-device">{topBar?.hostname || BRANDING.productName}</span>
             <span className="breadcrumb-sep">/</span>
             <span className="breadcrumb-current">{pageLabel}</span>
           </nav>
@@ -87,8 +90,9 @@ export default function TopBar({ topBar }) {
             )}
           </div>
           <div className="statusbar-right">
-            <span className="statusbar-label">Legion Controls</span>
-            <span className="statusbar-value">{topBar.productName || 'Sentry G1'}</span>
+            <SentryLogo size="compact" className="statusbar-logo" />
+            <span className="statusbar-label">{BRANDING.manufacturer}</span>
+            <span className="statusbar-value">{topBar.productName || BRANDING.productName}</span>
           </div>
         </div>
       )}

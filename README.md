@@ -39,6 +39,18 @@ npm install --prefix frontend
 npm run dev
 ```
 
+When running on Raspberry Pi:
+
+```bash
+npm run dev
+```
+
+Frontend will expose on:
+
+`http://<pi-ip>:5173`
+
+Do not rely on local-only localhost binding — the dev server binds to all interfaces (`0.0.0.0`) so other devices on the LAN can reach the UI.
+
 | Service | Default port | URL |
 |---------|--------------|-----|
 | Frontend (Vite) | 5173 | `http://<pi-ip>:5173` |

@@ -81,7 +81,7 @@ function getDiagnosticsSummary() {
     },
     bacnet: {
       ipDiscoveryImplemented: true,
-      mstpDiscoveryImplemented: false,
+      mstpDiscoveryImplemented: true,
       routingImplemented: false,
       routingStatus: 'Routing not implemented in DEV-1 software yet',
       recentLogs: bacnetLogs,

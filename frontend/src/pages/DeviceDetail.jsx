@@ -12,6 +12,10 @@ function formatLastSeen(iso) {
   return new Date(iso).toLocaleString();
 }
 
+function isMstpDevice(device) {
+  return device.transport === 'BACnet MS/TP' || device.transport === 'mstp';
+}
+
 const OBJECT_LABELS = [
   ['ai', 'AI'],
   ['ao', 'AO'],
@@ -23,6 +27,13 @@ const OBJECT_LABELS = [
   ['trendLogs', 'Trend Logs'],
   ['files', 'Files'],
 ];
+
+const SEGMENTATION_LABELS = {
+  0: 'Segmented Both',
+  1: 'Segmented Transmit',
+  2: 'Segmented Receive',
+  3: 'No Segmentation',
+};
 
 export default function DeviceDetailPage() {
   const { id } = useParams();
@@ -44,7 +55,7 @@ export default function DeviceDetailPage() {
         setHealth(healthRes);
         setObjects(objectsRes);
 
-        if (deviceRes.device.protocol === 'bacnet-ip' && deviceRes.device.address) {
+        if (!isMstpDevice(deviceRes.device) && deviceRes.device.address) {
           setLoadingDetails(true);
           api.readBacnetDevice(deviceRes.device.address, deviceRes.device.deviceInstance)
             .then(setBacnetDetails)
@@ -61,6 +72,7 @@ export default function DeviceDetailPage() {
   const summary = objects?.objectSummary || {};
   const details = bacnetDetails || {};
   const deviceTitle = device.objectName || `Device ${device.deviceInstance}`;
+  const mstp = isMstpDevice(device);
 
   return (
     <>
@@ -68,13 +80,32 @@ export default function DeviceDetailPage() {
         <Col lg={4}>
           <PanelCard title="Device Information">
             <KvRow label="Device Instance" value={device.deviceInstance} />
-            <KvRow label="Object Name" value={details.objectName || device.objectName || '—'} />
-            <KvRow label="Vendor" value={details.vendorName || device.vendor || device.vendorName || '—'} />
-            <KvRow label="Model" value={details.modelName || device.model || device.modelName || '—'} />
-            <KvRow label="Address" value={device.address} />
+            {!mstp && (
+              <>
+                <KvRow label="Object Name" value={details.objectName || device.objectName || '—'} />
+                <KvRow label="Vendor" value={details.vendorName || device.vendor || device.vendorName || '—'} />
+                <KvRow label="Model" value={details.modelName || device.model || device.modelName || '—'} />
+                <KvRow label="Address" value={device.address} />
+              </>
+            )}
+            {mstp && (
+              <>
+                <KvRow label="MAC Address" value={device.macAddress ?? '—'} />
+                <KvRow label="Network Number" value={device.networkNumber ?? '—'} />
+                <KvRow label="Vendor ID" value={device.vendorId ?? '—'} />
+                <KvRow label="Max APDU" value={device.maxApdu ?? '—'} />
+                <KvRow
+                  label="Segmentation"
+                  value={device.segmentation != null
+                    ? (SEGMENTATION_LABELS[device.segmentation] ?? device.segmentation)
+                    : '—'}
+                />
+                <KvRow label="Source" value="BACnet MS/TP Discovery" />
+              </>
+            )}
             <KvRow label="Network" value={device.network} />
             <KvRow label="Protocol" value={device.protocol} />
-            <KvRow label="Source" value={device.source || '—'} />
+            {!mstp && <KvRow label="Source" value={device.source || '—'} />}
             <KvRow label="Last Seen" value={formatLastSeen(device.lastSeen || device.lastSeenAt)} />
           </PanelCard>
         </Col>
@@ -94,37 +125,45 @@ export default function DeviceDetailPage() {
             <KvRow label="Communication Errors" value={health?.communicationErrors ?? '—'} />
           </PanelCard>
 
-          <PanelCard title="BACnet Device Properties" className="mt-3">
-            {loadingDetails && <p style={{ color: '#58677d', margin: 0 }}>Reading device properties…</p>}
-            {!loadingDetails && !bacnetDetails && device.protocol === 'bacnet-ip' && (
-              <p style={{ color: '#58677d', margin: 0 }}>Could not read BACnet device properties.</p>
-            )}
-            {bacnetDetails && (
-              <>
-                <KvRow label="Description" value={details.description || '—'} />
-                <KvRow label="Firmware Revision" value={details.firmwareRevision || '—'} />
-                <KvRow label="Application Software" value={details.applicationSoftwareVersion || '—'} />
-                <KvRow label="Protocol Version" value={details.protocolVersion || '—'} />
-                <KvRow label="Protocol Revision" value={details.protocolRevision || '—'} />
-                <KvRow label="Object List Count" value={details.objectListCount ?? '—'} />
-                {details.durationMs != null && (
-                  <KvRow label="Read Duration" value={`${details.durationMs}ms`} />
-                )}
-              </>
-            )}
-          </PanelCard>
+          {!mstp && (
+            <PanelCard title="BACnet Device Properties" className="mt-3">
+              {loadingDetails && <p style={{ color: '#58677d', margin: 0 }}>Reading device properties…</p>}
+              {!loadingDetails && !bacnetDetails && (
+                <p style={{ color: '#58677d', margin: 0 }}>Could not read BACnet device properties.</p>
+              )}
+              {bacnetDetails && (
+                <>
+                  <KvRow label="Description" value={details.description || '—'} />
+                  <KvRow label="Firmware Revision" value={details.firmwareRevision || '—'} />
+                  <KvRow label="Application Software" value={details.applicationSoftwareVersion || '—'} />
+                  <KvRow label="Protocol Version" value={details.protocolVersion || '—'} />
+                  <KvRow label="Protocol Revision" value={details.protocolRevision || '—'} />
+                  <KvRow label="Object List Count" value={details.objectListCount ?? '—'} />
+                  {details.durationMs != null && (
+                    <KvRow label="Read Duration" value={`${details.durationMs}ms`} />
+                  )}
+                </>
+              )}
+            </PanelCard>
+          )}
         </Col>
 
         <Col lg={4}>
           <PanelCard title="Object Summary">
-            {OBJECT_LABELS.map(([key, label]) => (
-              <KvRow key={key} label={label} value={summary[key] ?? 0} />
-            ))}
-            {objects && (
-              <KvRow label="Total Objects" value={objects.totalObjects} />
-            )}
-            {details.objectListCount != null && (
-              <KvRow label="Device Object List" value={details.objectListCount} />
+            {mstp ? (
+              <p style={{ color: '#58677d', margin: 0 }}>Object discovery not implemented yet.</p>
+            ) : (
+              <>
+                {OBJECT_LABELS.map(([key, label]) => (
+                  <KvRow key={key} label={label} value={summary[key] ?? 0} />
+                ))}
+                {objects && (
+                  <KvRow label="Total Objects" value={objects.totalObjects} />
+                )}
+                {details.objectListCount != null && (
+                  <KvRow label="Device Object List" value={details.objectListCount} />
+                )}
+              </>
             )}
           </PanelCard>
         </Col>
@@ -135,15 +174,19 @@ export default function DeviceDetailPage() {
           <Link to="/devices" className="btn btn-sentry-secondary">
             Back to Devices
           </Link>
-          <button type="button" className="btn btn-sentry-primary" disabled title="Object browser — not implemented in DEV-1">
-            Browse Objects
-          </button>
-          <button type="button" className="btn btn-sentry-secondary" disabled title="Live read — not implemented in DEV-1">
-            Live Read
-          </button>
-          <Link to="/diagnostics" className="btn btn-sentry-secondary">
-            Diagnostics
+          <Link to="/bacnet" className="btn btn-sentry-secondary">
+            BACnet
           </Link>
+          {!mstp && (
+            <>
+              <button type="button" className="btn btn-sentry-primary" disabled title="Object browser — not implemented in DEV-1">
+                Browse Objects
+              </button>
+              <button type="button" className="btn btn-sentry-secondary" disabled title="Live read — not implemented in DEV-1">
+                Live Read
+              </button>
+            </>
+          )}
         </div>
       </PanelCard>
     </>

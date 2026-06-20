@@ -3,6 +3,7 @@ const path = require('path');
 const { loadSettings, updateSection } = require('../../lib/settingsStore');
 const { DEVICE_STATES } = require('../../lib/deviceStates');
 const serialService = require('../interfaces/serial.service');
+const bacnetMstpService = require('./bacnetMstp.service');
 
 const BACNET_PATH = path.join(__dirname, '../../data/bacnet.json');
 
@@ -51,6 +52,7 @@ function getBacnetStatus() {
   const recommendedPort = serialDetail.ports.find((p) => p.recommendedForRs485 && p.exists);
   const lastSerialCheck = serialService.getLastOpenCheck();
   const monitor = serialService.getMonitorStatus();
+  const mstpInterface = bacnetMstpService.getStatus().status;
 
   return {
     ip: {
@@ -72,8 +74,9 @@ function getBacnetStatus() {
       monitor,
       lastSerialCheck,
       recommendedSerialPort: recommendedPort?.path || '/dev/serial0',
-      discoveryImplemented: false,
-      discoveryNote: 'BACnet MS/TP discovery is not implemented yet. Use RS485 Diagnostics to validate serial traffic first.',
+      discoveryImplemented: true,
+      interface: mstpInterface,
+      discoveryNote: 'BACnet MS/TP discovery sends real Who-Is frames over RS485. Token participation is not implemented yet.',
     },
     routing: {
       ...(settings.routing || {

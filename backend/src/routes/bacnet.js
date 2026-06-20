@@ -1,6 +1,7 @@
 const express = require('express');
 const bacnetService = require('../services/bacnet');
 const bacnetIpService = require('../services/bacnet/bacnetIp.service');
+const bacnetMstpService = require('../services/bacnet/bacnetMstp.service');
 const deviceService = require('../services/devices');
 const logsService = require('../services/logs');
 
@@ -61,6 +62,95 @@ router.post('/ip/read-device', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+router.get('/mstp/status', (_req, res) => {
+  res.json(bacnetMstpService.getStatus());
+});
+
+router.post('/mstp/open', async (req, res, next) => {
+  try {
+    const result = await bacnetMstpService.openInterface(req.body || {});
+    logsService.addLog({
+      level: 'info',
+      service: 'bacnet',
+      message: `BACnet MS/TP interface opened on ${result.status.port}`,
+    });
+    res.json(result);
+  } catch (err) {
+    logsService.addLog({
+      level: 'error',
+      service: 'bacnet',
+      message: `BACnet MS/TP open failed — ${err.message}`,
+    });
+    next(err);
+  }
+});
+
+router.post('/mstp/close', async (req, res, next) => {
+  try {
+    const result = await bacnetMstpService.closeInterface();
+    logsService.addLog({
+      level: 'info',
+      service: 'bacnet',
+      message: result.message,
+    });
+    res.json(result);
+  } catch (err) {
+    logsService.addLog({
+      level: 'error',
+      service: 'bacnet',
+      message: `BACnet MS/TP close failed — ${err.message}`,
+    });
+    next(err);
+  }
+});
+
+router.post('/mstp/discover', async (req, res, next) => {
+  const timeoutMs = Number(req.body?.timeoutMs) || 8000;
+
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: `BACnet MS/TP discovery started (timeout ${timeoutMs}ms)`,
+  });
+
+  try {
+    const discovery = await bacnetMstpService.discover(req.body || {});
+    let inventory = null;
+
+    if (discovery.devices?.length > 0) {
+      inventory = await deviceService.ingestBacnetMstpDiscovery(discovery);
+    }
+
+    logsService.addLog({
+      level: 'info',
+      service: 'bacnet',
+      message: discovery.devices?.length > 0
+        ? `BACnet MS/TP discovery complete — ${discovery.devices.length} device(s) in ${discovery.durationMs}ms`
+        : `BACnet MS/TP discovery finished — ${discovery.message || 'no devices found'}`,
+    });
+
+    res.json({
+      ...discovery,
+      inventory,
+    });
+  } catch (err) {
+    logsService.addLog({
+      level: 'error',
+      service: 'bacnet',
+      message: `BACnet MS/TP discovery failed — ${err.message}`,
+    });
+    next(err);
+  }
+});
+
+router.get('/mstp/logs', (_req, res) => {
+  res.json(bacnetMstpService.getLogs());
+});
+
+router.post('/mstp/clear-logs', (_req, res) => {
+  res.json(bacnetMstpService.clearLogs());
 });
 
 module.exports = router;

@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Col, Form, Nav, Row, Tab } from 'react-bootstrap';
+import { useCallback, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Col, Form, Row, Table } from 'react-bootstrap';
 import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
@@ -8,65 +9,93 @@ import LoadingState from '../components/common/LoadingState';
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 76800, 115200];
 
+const DEFAULT_MSTP = {
+  port: '/dev/serial0',
+  baudRate: 38400,
+  macAddress: 5,
+  maxMaster: 127,
+  maxInfoFrames: 1,
+  networkNumber: 2,
+};
+
+function formatTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString();
+}
+
+function formatLastSeen(iso) {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60000) return 'Just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  return formatTime(iso);
+}
+
+function deviceAddress(device) {
+  if (device.transport === 'BACnet MS/TP' || device.transport === 'mstp') {
+    return device.macAddress != null ? `MAC ${device.macAddress}` : '—';
+  }
+  return device.address || '—';
+}
+
 export default function BacnetPage() {
-  const [data, setData] = useState(null);
-  const [form, setForm] = useState(null);
-  const [serialDetail, setSerialDetail] = useState(null);
+  const navigate = useNavigate();
+  const [bacnetStatus, setBacnetStatus] = useState(null);
+  const [mstpStatus, setMstpStatus] = useState(null);
+  const [devices, setDevices] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [mstpForm, setMstpForm] = useState(DEFAULT_MSTP);
+  const [ipForm, setIpForm] = useState(null);
   const [message, setMessage] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [discoveryResult, setDiscoveryResult] = useState(null);
-  const [activeTab, setActiveTab] = useState('ip');
 
-  const load = async () => {
-    const [status, serial] = await Promise.all([
+  const load = useCallback(async () => {
+    const [status, mstp, deviceData, logData] = await Promise.all([
       api.getBacnetStatus(),
-      api.getSerialDetail(),
+      api.getBacnetMstpStatus(),
+      api.getDevices(),
+      api.getBacnetMstpLogs(),
     ]);
-    setData(status);
-    setSerialDetail(serial);
-    setForm({
-      ip: { ...status.ip },
-      mstp: { ...status.mstp },
-      routing: { ...status.routing },
+    setBacnetStatus(status);
+    setMstpStatus(mstp.status);
+    setDevices(deviceData.devices || []);
+    setLogs(logData.logs || []);
+    setIpForm({
+      enabled: status.ip.enabled,
+      deviceInstance: status.ip.deviceInstance,
+      udpPort: status.ip.udpPort,
+      networkNumber: status.ip.networkNumber,
     });
-  };
+    setMstpForm({
+      port: mstp.status?.port || status.mstp.serialPort || DEFAULT_MSTP.port,
+      baudRate: mstp.status?.baudRate || status.mstp.baudRate || DEFAULT_MSTP.baudRate,
+      macAddress: mstp.status?.macAddress ?? status.mstp.macAddress ?? DEFAULT_MSTP.macAddress,
+      maxMaster: mstp.status?.maxMaster ?? status.mstp.maxMaster ?? DEFAULT_MSTP.maxMaster,
+      maxInfoFrames: mstp.status?.maxInfoFrames ?? status.mstp.maxInfoFrames ?? DEFAULT_MSTP.maxInfoFrames,
+      networkNumber: mstp.status?.networkNumber ?? status.mstp.networkNumber ?? DEFAULT_MSTP.networkNumber,
+    });
+  }, []);
 
-  useEffect(() => { load().catch(console.error); }, []);
+  useEffect(() => {
+    load().catch((err) => setMessage({ type: 'error', text: err.message }));
+  }, [load]);
 
-  const updateIp = (field, value) => {
-    setForm((prev) => ({ ...prev, ip: { ...prev.ip, [field]: value } }));
+  const refreshLogs = async () => {
+    const logData = await api.getBacnetMstpLogs();
+    setLogs(logData.logs || []);
   };
 
   const updateMstp = (field, value) => {
-    setForm((prev) => ({ ...prev, mstp: { ...prev.mstp, [field]: value } }));
-  };
-
-  const updateRouting = (field, value) => {
-    setForm((prev) => ({ ...prev, routing: { ...prev.routing, [field]: value } }));
-  };
-
-  const handleSave = async () => {
-    setLoading(true);
-    setMessage(null);
-    try {
-      const result = await api.saveBacnetSettings(form);
-      setData(result.data);
-      setMessage({ type: 'success', text: 'BACnet settings saved.' });
-    } catch (err) {
-      setMessage({ type: 'error', text: err.message });
-    } finally {
-      setLoading(false);
-    }
+    setMstpForm((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleDiscoverIp = async () => {
     setLoading(true);
     setMessage(null);
-    setDiscoveryResult(null);
     try {
       const result = await api.discoverBacnetIp(5000);
-      setDiscoveryResult(result);
-      const found = result.devices?.length ?? 0;
+      await load();
+      const found = result.devices?.length ?? result.inventory?.devicesFound ?? 0;
       setMessage({
         type: found ? 'success' : 'info',
         text: found
@@ -80,20 +109,13 @@ export default function BacnetPage() {
     }
   };
 
-  const handleSerialCheck = async () => {
+  const handleOpenMstp = async () => {
     setLoading(true);
     setMessage(null);
     try {
-      const path = form.mstp.serialPort;
-      const baudRate = form.mstp.baudRate;
-      const result = await api.openSerialCheck({ path, baudRate });
+      await api.openBacnetMstp(mstpForm);
       await load();
-      setMessage({
-        type: result.success ? 'success' : 'error',
-        text: result.success
-          ? `RS485 port check OK — ${result.path} opened in ${result.responseTimeMs}ms`
-          : `RS485 port check failed — ${result.error}`,
-      });
+      setMessage({ type: 'success', text: `MS/TP interface opened on ${mstpForm.port}.` });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -101,19 +123,13 @@ export default function BacnetPage() {
     }
   };
 
-  const handleApplySerial = async () => {
+  const handleCloseMstp = async () => {
     setLoading(true);
     setMessage(null);
     try {
-      const result = await api.configureSerial({
-        path: form.mstp.serialPort,
-        baudRate: form.mstp.baudRate,
-      });
+      const result = await api.closeBacnetMstp();
       await load();
-      setMessage({
-        type: 'success',
-        text: `MS/TP serial settings applied — ${result.port.path} at ${result.port.currentBaudRate} baud`,
-      });
+      setMessage({ type: 'success', text: result.message });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -121,10 +137,49 @@ export default function BacnetPage() {
     }
   };
 
-  if (!form || !data) return <LoadingState message="Loading BACnet configuration…" />;
+  const handleDiscoverMstp = async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const result = await api.discoverBacnetMstp({ ...mstpForm, timeoutMs: 8000 });
+      await load();
+      const found = result.devices?.length ?? 0;
+      if (result.message && found === 0) {
+        setMessage({ type: 'info', text: result.message });
+      } else if (found > 0) {
+        setMessage({
+          type: 'success',
+          text: `BACnet MS/TP discovery found ${found} device(s) in ${result.durationMs}ms.`,
+        });
+      } else {
+        setMessage({ type: 'info', text: 'No MS/TP responses received.' });
+      }
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  const recommendedPort = serialDetail?.ports?.find((p) => p.recommendedForRs485 && p.exists);
-  const lastSerialCheck = data.mstp.lastSerialCheck || serialDetail?.lastOpenCheck;
+  const handleClearLogs = async () => {
+    setLoading(true);
+    try {
+      await api.clearBacnetMstpLogs();
+      await refreshLogs();
+      setMessage({ type: 'success', text: 'Discovery logs cleared.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!bacnetStatus || !ipForm) {
+    return <LoadingState message="Loading BACnet configuration…" />;
+  }
+
+  const mstp = mstpStatus || {};
+  const interfaceOpen = Boolean(mstp.open);
 
   return (
     <>
@@ -134,268 +189,205 @@ export default function BacnetPage() {
         </div>
       )}
 
-      <Tab.Container activeKey={activeTab} onSelect={(k) => setActiveTab(k || 'ip')}>
-        <Nav variant="tabs" className="mb-3 sentry-tabs">
-          <Nav.Item>
-            <Nav.Link eventKey="ip">BACnet/IP Discovery</Nav.Link>
-          </Nav.Item>
-          <Nav.Item>
-            <Nav.Link eventKey="mstp">BACnet MS/TP Serial</Nav.Link>
-          </Nav.Item>
-          <Nav.Item>
-            <Nav.Link eventKey="routing">Routing Status</Nav.Link>
-          </Nav.Item>
-        </Nav>
+      <Row className="g-3">
+        <Col lg={6}>
+          <PanelCard title="BACnet/IP Discovery">
+            <div className="kv-row mb-2">
+              <span className="kv-label">Status</span>
+              <span className="kv-value">
+                <StatusBadge status={bacnetStatus.ip.status} label={bacnetStatus.ip.label} />
+              </span>
+            </div>
+            <KvRow label="Device Instance" value={ipForm.deviceInstance} />
+            <KvRow label="UDP Port" value={ipForm.udpPort} />
+            <KvRow label="Network Number" value={ipForm.networkNumber} />
+            <div className="action-bar mt-3">
+              <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverIp} disabled={loading}>
+                Discover BACnet/IP
+              </button>
+            </div>
+          </PanelCard>
+        </Col>
 
-        <Tab.Content>
-          <Tab.Pane eventKey="ip">
+        <Col lg={6}>
+          <PanelCard title="BACnet MS/TP Interface">
             <Row>
-              <Col lg={6}>
-                <PanelCard title="BACnet/IP Service">
-                  <div className="kv-row mb-2">
-                    <span className="kv-label">Service</span>
-                    <span className="kv-value"><StatusBadge status={data.ip.status} label={data.ip.label} /></span>
-                  </div>
-                  <Form.Check
-                    type="switch"
-                    id="bacnet-ip"
-                    label="Enable Service"
-                    checked={form.ip.enabled}
-                    onChange={(e) => updateIp('enabled', e.target.checked)}
-                    className="mb-3"
+              <Col sm={6}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Port</Form.Label>
+                  <Form.Control
+                    value={mstpForm.port}
+                    onChange={(e) => updateMstp('port', e.target.value)}
+                    disabled={interfaceOpen}
                   />
-                  <Row>
-                    <Col sm={6}>
-                      <Form.Group className="mb-2">
-                        <Form.Label>Device Instance</Form.Label>
-                        <Form.Control
-                          type="number"
-                          value={form.ip.deviceInstance}
-                          onChange={(e) => updateIp('deviceInstance', Number(e.target.value))}
-                        />
-                      </Form.Group>
-                    </Col>
-                    <Col sm={6}>
-                      <Form.Group className="mb-2">
-                        <Form.Label>UDP Port</Form.Label>
-                        <Form.Control
-                          type="number"
-                          value={form.ip.udpPort}
-                          onChange={(e) => updateIp('udpPort', Number(e.target.value))}
-                        />
-                      </Form.Group>
-                    </Col>
-                  </Row>
-                  <Form.Group className="mb-2">
-                    <Form.Label>Network Number</Form.Label>
-                    <Form.Control
-                      type="number"
-                      value={form.ip.networkNumber}
-                      onChange={(e) => updateIp('networkNumber', Number(e.target.value))}
-                    />
-                  </Form.Group>
-                </PanelCard>
+                </Form.Group>
               </Col>
-              <Col lg={6}>
-                <PanelCard title="BACnet/IP Discovery">
-                  <div className="action-bar">
-                    <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverIp} disabled={loading}>
-                      Discover BACnet/IP
-                    </button>
-                  </div>
-                  {discoveryResult && (
-                    <div className="mt-3">
-                      <KvRow label="Duration" value={`${discoveryResult.durationMs}ms`} />
-                      <KvRow label="Devices Found" value={discoveryResult.devices?.length ?? 0} />
-                    </div>
-                  )}
-                </PanelCard>
+              <Col sm={6}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Baud Rate</Form.Label>
+                  <Form.Select
+                    value={mstpForm.baudRate}
+                    onChange={(e) => updateMstp('baudRate', Number(e.target.value))}
+                    disabled={interfaceOpen}
+                  >
+                    {BAUD_RATES.map((rate) => (
+                      <option key={rate} value={rate}>{rate}</option>
+                    ))}
+                  </Form.Select>
+                </Form.Group>
               </Col>
             </Row>
-          </Tab.Pane>
-
-          <Tab.Pane eventKey="mstp">
             <Row>
-              <Col lg={6}>
-                <PanelCard title="MS/TP Serial Interface">
-                  <div className="kv-row mb-2">
-                    <span className="kv-label">Service</span>
-                    <span className="kv-value"><StatusBadge status={data.mstp.status} label={data.mstp.label} /></span>
-                  </div>
-                  <KvRow label="Recommended Port" value={recommendedPort?.path || '/dev/serial0'} />
-                  <KvRow
-                    label="Monitor Status"
-                    value={data.mstp.monitor?.running ? 'Running' : 'Stopped'}
+              <Col sm={4}>
+                <Form.Group className="mb-2">
+                  <Form.Label>MAC Address</Form.Label>
+                  <Form.Control
+                    type="number"
+                    value={mstpForm.macAddress}
+                    onChange={(e) => updateMstp('macAddress', Number(e.target.value))}
+                    disabled={interfaceOpen}
                   />
-                  {data.mstp.monitor?.running && (
-                    <KvRow label="RX Bytes" value={data.mstp.monitor.rxBytes ?? 0} />
-                  )}
-                  <KvRow
-                    label="Serial Port Open Status"
-                    value={(
-                      <StatusBadge
-                        status={lastSerialCheck?.success ? 'running' : lastSerialCheck ? 'fault' : 'not_configured'}
-                        label={lastSerialCheck?.success ? 'Open OK' : lastSerialCheck ? 'Failed' : 'Not checked'}
-                      />
-                    )}
-                  />
-                  {lastSerialCheck && (
-                    <KvRow label="Last Serial Check" value={`${lastSerialCheck.checkedAt} (${lastSerialCheck.responseTimeMs ?? '—'}ms)`} />
-                  )}
-                  <Form.Check
-                    type="switch"
-                    id="bacnet-mstp"
-                    label="Enable Service"
-                    checked={form.mstp.enabled}
-                    onChange={(e) => updateMstp('enabled', e.target.checked)}
-                    className="mb-3 mt-2"
-                  />
-                  <Form.Group className="mb-2">
-                    <Form.Label>Serial Port</Form.Label>
-                    <Form.Control
-                      value={form.mstp.serialPort}
-                      onChange={(e) => updateMstp('serialPort', e.target.value)}
-                    />
-                  </Form.Group>
-                  <Row>
-                    <Col sm={6}>
-                      <Form.Group className="mb-2">
-                        <Form.Label>MAC Address</Form.Label>
-                        <Form.Control
-                          type="number"
-                          value={form.mstp.macAddress}
-                          onChange={(e) => updateMstp('macAddress', Number(e.target.value))}
-                        />
-                      </Form.Group>
-                    </Col>
-                    <Col sm={6}>
-                      <Form.Group className="mb-2">
-                        <Form.Label>Baud Rate</Form.Label>
-                        <Form.Select
-                          value={form.mstp.baudRate}
-                          onChange={(e) => updateMstp('baudRate', Number(e.target.value))}
-                        >
-                          {BAUD_RATES.map((rate) => (
-                            <option key={rate} value={rate}>{rate}</option>
-                          ))}
-                        </Form.Select>
-                      </Form.Group>
-                    </Col>
-                  </Row>
-                  <Row>
-                    <Col sm={6}>
-                      <Form.Group className="mb-2">
-                        <Form.Label>Max Master</Form.Label>
-                        <Form.Control
-                          type="number"
-                          value={form.mstp.maxMaster}
-                          onChange={(e) => updateMstp('maxMaster', Number(e.target.value))}
-                        />
-                      </Form.Group>
-                    </Col>
-                    <Col sm={6}>
-                      <Form.Group className="mb-2">
-                        <Form.Label>Max Info Frames</Form.Label>
-                        <Form.Control
-                          type="number"
-                          value={form.mstp.maxInfoFrames}
-                          onChange={(e) => updateMstp('maxInfoFrames', Number(e.target.value))}
-                        />
-                      </Form.Group>
-                    </Col>
-                  </Row>
-                  <Form.Group>
-                    <Form.Label>Network Number</Form.Label>
-                    <Form.Control
-                      type="number"
-                      value={form.mstp.networkNumber}
-                      onChange={(e) => updateMstp('networkNumber', Number(e.target.value))}
-                    />
-                  </Form.Group>
-                </PanelCard>
+                </Form.Group>
               </Col>
-              <Col lg={6}>
-                <PanelCard title="RS485 Port Actions">
-                  <div className="action-bar">
-                    <button type="button" className="btn btn-sentry-primary" onClick={handleSerialCheck} disabled={loading}>
-                      Check RS485 Port
-                    </button>
-                    <button type="button" className="btn btn-sentry-secondary" onClick={handleApplySerial} disabled={loading}>
-                      Apply MS/TP Serial Settings
-                    </button>
-                    <button type="button" className="btn btn-sentry-secondary" disabled title="BACnet MS/TP discovery not implemented yet">
-                      Discover BACnet MS/TP
-                    </button>
-                  </div>
-                  {serialDetail?.ports && (
-                    <div className="mt-3">
-                      <strong>Detected Ports</strong>
-                      {serialDetail.ports.filter((p) => p.exists).map((port) => (
-                        <KvRow
-                          key={port.path}
-                          label={port.path}
-                          value={`${port.currentBaudRate ?? '—'} baud${port.notes ? ` — ${port.notes}` : ''}`}
-                        />
-                      ))}
-                    </div>
-                  )}
-                </PanelCard>
+              <Col sm={4}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Max Master</Form.Label>
+                  <Form.Control
+                    type="number"
+                    value={mstpForm.maxMaster}
+                    onChange={(e) => updateMstp('maxMaster', Number(e.target.value))}
+                    disabled={interfaceOpen}
+                  />
+                </Form.Group>
+              </Col>
+              <Col sm={4}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Max Info Frames</Form.Label>
+                  <Form.Control
+                    type="number"
+                    value={mstpForm.maxInfoFrames}
+                    onChange={(e) => updateMstp('maxInfoFrames', Number(e.target.value))}
+                    disabled={interfaceOpen}
+                  />
+                </Form.Group>
               </Col>
             </Row>
-          </Tab.Pane>
+            <Form.Group className="mb-2">
+              <Form.Label>Network Number</Form.Label>
+              <Form.Control
+                type="number"
+                value={mstpForm.networkNumber}
+                onChange={(e) => updateMstp('networkNumber', Number(e.target.value))}
+                disabled={interfaceOpen}
+              />
+            </Form.Group>
+            <KvRow
+              label="Interface Status"
+              value={(
+                <StatusBadge
+                  status={interfaceOpen ? 'running' : 'not_configured'}
+                  label={interfaceOpen ? 'Open' : 'Closed'}
+                />
+              )}
+            />
+            <KvRow label="RX Bytes" value={mstp.rxBytes ?? 0} />
+            <KvRow label="TX Bytes" value={mstp.txBytes ?? 0} />
+            <KvRow label="Last Activity" value={formatTime(mstp.lastActivityAt)} />
+            <KvRow label="Last Error" value={mstp.lastError || '—'} />
+            <div className="action-bar mt-3">
+              <button type="button" className="btn btn-sentry-primary" onClick={handleOpenMstp} disabled={loading || interfaceOpen}>
+                Open Interface
+              </button>
+              <button type="button" className="btn btn-sentry-secondary" onClick={handleCloseMstp} disabled={loading || !interfaceOpen}>
+                Close Interface
+              </button>
+              <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverMstp} disabled={loading}>
+                Discover BACnet MS/TP
+              </button>
+              <button type="button" className="btn btn-sentry-secondary" onClick={handleClearLogs} disabled={loading}>
+                Clear Logs
+              </button>
+            </div>
+          </PanelCard>
+        </Col>
+      </Row>
 
-          <Tab.Pane eventKey="routing">
-            <PanelCard title="Routing Status">
-              <div className="alert-sentry alert-sentry-info">
-                Routing not implemented in DEV-1 software yet.
-              </div>
-              <KvRow label="Status" value={<StatusBadge status="not_configured" label="Not implemented" />} />
-              <Row className="mt-2">
-                <Col sm={4}>
-                  <Form.Group className="mb-2">
-                    <Form.Label>IP Network</Form.Label>
-                    <Form.Control
-                      type="number"
-                      value={form.routing.ipNetwork}
-                      onChange={(e) => updateRouting('ipNetwork', Number(e.target.value))}
-                      disabled
-                    />
-                  </Form.Group>
-                </Col>
-                <Col sm={4}>
-                  <Form.Group className="mb-2">
-                    <Form.Label>MS/TP Network</Form.Label>
-                    <Form.Control
-                      type="number"
-                      value={form.routing.mstpNetwork}
-                      onChange={(e) => updateRouting('mstpNetwork', Number(e.target.value))}
-                      disabled
-                    />
-                  </Form.Group>
-                </Col>
-                <Col sm={4}>
-                  <Form.Check
-                    type="switch"
-                    id="route-enabled"
-                    label="Route Enabled"
-                    checked={form.routing.routeEnabled}
-                    onChange={(e) => updateRouting('routeEnabled', e.target.checked)}
-                    className="mt-4"
-                    disabled
-                  />
-                </Col>
-              </Row>
-            </PanelCard>
-          </Tab.Pane>
-        </Tab.Content>
-      </Tab.Container>
+      <PanelCard title="Discovered Devices" className="mt-3">
+        {devices.length === 0 ? (
+          <p style={{ color: '#58677d', margin: 0 }}>No devices discovered yet. Run BACnet/IP or MS/TP discovery.</p>
+        ) : (
+          <Table responsive hover className="sentry-table mb-0">
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>Transport</th>
+                <th>Device Instance</th>
+                <th>Object Name</th>
+                <th>Vendor</th>
+                <th>Model</th>
+                <th>Address/MAC</th>
+                <th>Network</th>
+                <th>Last Seen</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {devices.map((device) => (
+                <tr key={device.id}>
+                  <td><StatusBadge status={device.status} /></td>
+                  <td>{device.network || device.transport}</td>
+                  <td>{device.deviceInstance}</td>
+                  <td>{device.objectName || '—'}</td>
+                  <td>{device.vendor || device.vendorName || '—'}</td>
+                  <td>{device.model || device.modelName || '—'}</td>
+                  <td>{deviceAddress(device)}</td>
+                  <td>{device.networkNumber ?? '—'}</td>
+                  <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn-sentry-secondary btn-sm"
+                      onClick={() => navigate(`/devices/${device.id}`)}
+                    >
+                      Details
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </PanelCard>
 
-      <PanelCard title="Configuration Actions" className="mt-3">
-        <div className="action-bar">
-          <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
-            Save Settings
-          </button>
-        </div>
+      <PanelCard title="Discovery Log" className="mt-3">
+        {logs.length === 0 ? (
+          <p style={{ color: '#58677d', margin: 0 }}>No discovery logs yet.</p>
+        ) : (
+          <Table responsive className="sentry-table mb-0">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Level</th>
+                <th>Source</th>
+                <th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.map((entry, index) => (
+                <tr key={`${entry.time}-${index}`}>
+                  <td>{formatTime(entry.time)}</td>
+                  <td>{entry.level}</td>
+                  <td>{entry.source}</td>
+                  <td>{entry.message}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </PanelCard>
+
+      <PanelCard title="Routing Status" className="mt-3">
+        <p style={{ color: '#58677d', margin: 0 }}>Routing is not implemented in DEV-1 yet.</p>
       </PanelCard>
     </>
   );

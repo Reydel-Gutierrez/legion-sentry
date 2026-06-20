@@ -54,6 +54,12 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ timeoutMs }),
   }),
+  getBacnetMstpStatus: () => request('/bacnet/mstp/status'),
+  openBacnetMstp: (data) => request('/bacnet/mstp/open', { method: 'POST', body: JSON.stringify(data || {}) }),
+  closeBacnetMstp: () => request('/bacnet/mstp/close', { method: 'POST' }),
+  discoverBacnetMstp: (data) => request('/bacnet/mstp/discover', { method: 'POST', body: JSON.stringify(data || {}) }),
+  getBacnetMstpLogs: () => request('/bacnet/mstp/logs'),
+  clearBacnetMstpLogs: () => request('/bacnet/mstp/clear-logs', { method: 'POST' }),
   readBacnetDevice: (address, deviceInstance) => request('/bacnet/ip/read-device', {
     method: 'POST',
     body: JSON.stringify({ address, deviceInstance }),

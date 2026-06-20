@@ -86,11 +86,28 @@ export default function DevicesPage() {
     }
   };
 
-  const handleDiscoverMstp = () => {
-    setMessage({
-      type: 'info',
-      text: 'BACnet MS/TP discovery is not implemented yet. Use RS485 Diagnostics to validate serial traffic first.',
-    });
+  const handleDiscoverMstp = async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const result = await api.discoverBacnetMstp({ timeoutMs: 8000 });
+      const inventory = result.inventory || {};
+      setDevices(inventory.devices?.length ? inventory.devices : (await api.getDevices()).devices);
+      const found = result.devices?.length ?? 0;
+      if (found === 0) {
+        setMessage({ type: 'info', text: result.message || 'No MS/TP responses received.' });
+      } else {
+        setMessage({
+          type: 'success',
+          text: `BACnet MS/TP discovery complete — ${found} device(s) found in ${result.durationMs}ms.`,
+        });
+      }
+      load();
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleClear = async () => {
@@ -152,7 +169,11 @@ export default function DevicesPage() {
                   <td>{device.objectName || '—'}</td>
                   <td>{device.vendor || device.vendorName || '—'}</td>
                   <td>{device.model || device.modelName || '—'}</td>
-                  <td className="mono">{device.address}</td>
+                  <td className="mono">
+                    {device.transport === 'BACnet MS/TP' || device.transport === 'mstp'
+                      ? (device.macAddress != null ? `MAC ${device.macAddress}` : '—')
+                      : (device.address || '—')}
+                  </td>
                   <td>{device.network}</td>
                   <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
                   <td>

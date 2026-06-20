@@ -5,7 +5,7 @@ const { DEVICE_HEALTH } = require('../../lib/deviceStates');
 
 const USE_MOCK_DATA = process.env.MOCK_DATA === 'true';
 const BACNET_IP_DISCOVERY_IMPLEMENTED = true;
-const BACNET_MSTP_DISCOVERY_IMPLEMENTED = false;
+const BACNET_MSTP_DISCOVERY_IMPLEMENTED = true;
 
 let hasScanned = false;
 let lastRefresh = null;
@@ -38,7 +38,10 @@ function buildSummary(devices) {
   const offline = devices.filter((d) => d.status === DEVICE_HEALTH.OFFLINE).length;
   const fault = devices.filter((d) => d.status === 'fault').length;
   const mstpNetworks = new Set(
-    devices.filter((d) => d.transport === 'mstp' && d.networkNumber != null).map((d) => d.networkNumber),
+    devices.filter((d) => (
+      d.transport === 'mstp'
+      || d.transport === 'BACnet MS/TP'
+    ) && d.networkNumber != null).map((d) => d.networkNumber),
   ).size;
 
   return {
@@ -55,9 +58,11 @@ function normalizeDeviceForApi(device) {
     ...device,
     vendor: device.vendorName || device.vendor,
     model: device.modelName || device.model,
-    network: device.transport === 'BACnet/IP' || device.transport === 'mstp'
-      ? (device.transport === 'mstp' ? 'BACnet MS/TP' : 'BACnet/IP')
-      : (device.transport === 'mstp' ? 'BACnet MS/TP' : 'BACnet/IP'),
+    network: device.transport === 'BACnet/IP'
+      ? 'BACnet/IP'
+      : (device.transport === 'mstp' || device.transport === 'BACnet MS/TP'
+        ? 'BACnet MS/TP'
+        : (device.transport || '—')),
     lastSeen: device.lastSeenAt || device.lastSeen,
     firmware: device.firmwareRevision || device.firmware || null,
   };
@@ -153,13 +158,44 @@ function mapDiscoveredToInventory(discovered, source = 'bacnet-ip-discovery') {
   };
 }
 
-function mergeDiscoveredDevices(discoveredList) {
+function mapMstpDiscoveredToInventory(discovered, source = 'bacnet-mstp-discovery') {
+  const now = new Date().toISOString();
+  const macAddress = discovered.macAddress;
+  return {
+    id: inventory.generateDeviceId('bacnet-mstp', discovered.deviceInstance, `mac-${macAddress}`),
+    protocol: 'BACnet',
+    transport: 'BACnet MS/TP',
+    deviceInstance: discovered.deviceInstance,
+    objectName: discovered.objectName || null,
+    vendorName: discovered.vendorName || null,
+    modelName: discovered.modelName || null,
+    address: null,
+    networkNumber: discovered.networkNumber ?? null,
+    macAddress,
+    status: discovered.status || DEVICE_HEALTH.ONLINE,
+    lastSeenAt: now,
+    lastResponseMs: discovered.lastResponseMs ?? null,
+    source,
+    vendorId: discovered.vendorId ?? null,
+    maxApdu: discovered.maxApdu ?? null,
+    segmentation: discovered.segmentation ?? null,
+  };
+}
+
+function deviceMergeKey(device) {
+  if (device.transport === 'BACnet MS/TP' || device.transport === 'mstp') {
+    return `mstp:${device.macAddress}:${device.deviceInstance}`;
+  }
+  return `${device.address}:${device.deviceInstance}`;
+}
+
+function mergeDiscoveredDevices(discoveredList, mapper = mapDiscoveredToInventory) {
   const existing = loadDevices();
-  const byKey = new Map(existing.map((d) => [`${d.address}:${d.deviceInstance}`, d]));
+  const byKey = new Map(existing.map((d) => [deviceMergeKey(d), d]));
 
   for (const discovered of discoveredList) {
-    const mapped = mapDiscoveredToInventory(discovered);
-    const key = `${mapped.address}:${mapped.deviceInstance}`;
+    const mapped = mapper(discovered);
+    const key = deviceMergeKey(mapped);
     const prev = byKey.get(key);
     byKey.set(key, prev ? {
       ...prev,
@@ -184,8 +220,9 @@ function discoverDevices(protocol = 'all') {
     if (USE_MOCK_DATA) {
       const durationMs = 6200;
       const filtered = mockData.MOCK_DEVICES.filter((d) => d.protocol === 'bacnet-mstp');
-      const devices = filtered.map((d) => mapDiscoveredToInventory({
+      const devices = filtered.map((d) => mapMstpDiscoveredToInventory({
         ...d,
+        macAddress: d.macAddress,
         status: d.status === 'offline' ? DEVICE_HEALTH.OFFLINE : DEVICE_HEALTH.ONLINE,
       }, 'mock'));
       persistDevices(devices);
@@ -200,9 +237,9 @@ function discoverDevices(protocol = 'all') {
       };
     }
 
-    const error = new Error('BACnet MS/TP discovery not implemented yet');
-    error.statusCode = 501;
-    error.code = 'NOT_IMPLEMENTED';
+    const error = new Error('Use POST /api/bacnet/mstp/discover for BACnet MS/TP discovery');
+    error.statusCode = 400;
+    error.code = 'USE_BACNET_MSTP_ENDPOINT';
     throw error;
   }
 
@@ -237,7 +274,7 @@ function discoverDevices(protocol = 'all') {
 }
 
 async function ingestBacnetIpDiscovery(result) {
-  const merged = mergeDiscoveredDevices(result.devices);
+  const merged = mergeDiscoveredDevices(result.devices, mapDiscoveredToInventory);
   return {
     success: true,
     protocol: 'bacnet-ip',
@@ -245,6 +282,18 @@ async function ingestBacnetIpDiscovery(result) {
     durationMs: result.durationMs,
     devicesFound: merged.length,
     devices: merged.map(normalizeDeviceForApi),
+  };
+}
+
+async function ingestBacnetMstpDiscovery(result) {
+  const merged = mergeDiscoveredDevices(result.devices, mapMstpDiscoveredToInventory);
+  return {
+    success: true,
+    protocol: 'bacnet-mstp',
+    scannedAt: result.discoveredAt,
+    durationMs: result.durationMs,
+    devicesFound: result.devices.length,
+    devices: merged.filter((d) => d.transport === 'BACnet MS/TP').map(normalizeDeviceForApi),
   };
 }
 
@@ -291,6 +340,8 @@ async function refreshDevices() {
           status: DEVICE_HEALTH.OFFLINE,
         });
       }
+    } else if (device.transport === 'BACnet MS/TP' || device.transport === 'mstp') {
+      refreshed.push({ ...device });
     } else {
       refreshed.push({
         ...device,
@@ -371,6 +422,7 @@ module.exports = {
   getDeviceObjects,
   discoverDevices,
   ingestBacnetIpDiscovery,
+  ingestBacnetMstpDiscovery,
   refreshDevices,
   deleteDevice,
   clearInventory,

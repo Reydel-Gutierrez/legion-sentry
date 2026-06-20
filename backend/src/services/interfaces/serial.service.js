@@ -511,4 +511,6 @@ module.exports = {
   getMonitorStatus,
   startSerialMonitor,
   stopSerialMonitor,
+  validatePath,
+  validateBaudRate,
 };

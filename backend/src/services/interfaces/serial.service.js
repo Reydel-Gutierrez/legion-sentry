@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { execSync } = require('child_process');
 const { SerialPort } = require('serialport');
 
@@ -10,6 +11,18 @@ const RS485_RECOMMENDED = new Set(['/dev/serial0', '/dev/ttyAMA0', '/dev/ttyS0']
 
 let lastOpenCheck = null;
 let lastConfigure = null;
+
+const monitorState = {
+  running: false,
+  path: null,
+  baudRate: null,
+  rxBytes: 0,
+  txBytes: 0,
+  lastActivityAt: null,
+  lastError: null,
+  startedAt: null,
+  port: null,
+};
 
 function pathExists(devicePath) {
   try {
@@ -64,10 +77,18 @@ function buildPortDetail(devicePath) {
   };
 }
 
+function getDefaultPort() {
+  if (pathExists('/dev/serial0')) return '/dev/serial0';
+  const first = ALLOWED_PATHS.find(pathExists);
+  return first || '/dev/serial0';
+}
+
 function getSerialDetail() {
   const ports = ALLOWED_PATHS.map(buildPortDetail);
   return {
     ports,
+    defaultPort: getDefaultPort(),
+    monitor: getMonitorStatus(),
     lastOpenCheck,
     lastConfigure,
     scannedAt: new Date().toISOString(),
@@ -211,6 +232,103 @@ function getLastConfigure() {
   return lastConfigure;
 }
 
+function getMonitorStatus() {
+  return {
+    running: monitorState.running,
+    path: monitorState.path,
+    baudRate: monitorState.baudRate,
+    rxBytes: monitorState.rxBytes,
+    txBytes: monitorState.txBytes,
+    lastActivityAt: monitorState.lastActivityAt,
+    lastError: monitorState.lastError,
+    startedAt: monitorState.startedAt,
+  };
+}
+
+function stopMonitorInternal() {
+  return new Promise((resolve) => {
+    if (!monitorState.port) {
+      monitorState.running = false;
+      resolve(getMonitorStatus());
+      return;
+    }
+
+    const port = monitorState.port;
+    monitorState.port = null;
+    monitorState.running = false;
+
+    port.close(() => {
+      resolve(getMonitorStatus());
+    });
+  });
+}
+
+function startSerialMonitor({ path: devicePath, baudRate }) {
+  if (monitorState.running) {
+    const error = new Error('Serial monitor is already running');
+    error.statusCode = 409;
+    error.code = 'MONITOR_RUNNING';
+    throw error;
+  }
+
+  if (os.platform() === 'win32') {
+    const error = new Error('Serial monitor is not supported on Windows development hosts');
+    error.statusCode = 501;
+    error.code = 'UNSUPPORTED_PLATFORM';
+    throw error;
+  }
+
+  validatePath(devicePath);
+  const rate = validateBaudRate(baudRate);
+
+  return new Promise((resolve, reject) => {
+    try {
+      const port = new SerialPort({
+        path: devicePath,
+        baudRate: rate,
+        autoOpen: false,
+      });
+
+      port.on('data', (data) => {
+        monitorState.rxBytes += data.length;
+        monitorState.lastActivityAt = new Date().toISOString();
+      });
+
+      port.on('error', (err) => {
+        monitorState.lastError = err.message;
+      });
+
+      port.open((openErr) => {
+        if (openErr) {
+          monitorState.lastError = openErr.message;
+          reject(openErr);
+          return;
+        }
+
+        monitorState.running = true;
+        monitorState.path = devicePath;
+        monitorState.baudRate = rate;
+        monitorState.rxBytes = 0;
+        monitorState.txBytes = 0;
+        monitorState.lastActivityAt = null;
+        monitorState.lastError = null;
+        monitorState.startedAt = new Date().toISOString();
+        monitorState.port = port;
+        resolve(getMonitorStatus());
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function stopSerialMonitor() {
+  if (!monitorState.running) {
+    return getMonitorStatus();
+  }
+  return stopMonitorInternal();
+}
+
 module.exports = {
   ALLOWED_PATHS,
   ALLOWED_BAUD_RATES,
@@ -219,4 +337,7 @@ module.exports = {
   openSerialCheck,
   getLastOpenCheck,
   getLastConfigure,
+  getMonitorStatus,
+  startSerialMonitor,
+  stopSerialMonitor,
 };

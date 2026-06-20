@@ -6,34 +6,111 @@ import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
 import PageHeader from '../components/common/PageHeader';
 
+function InterfaceConfigForm({ ifaceName, config, onChange, disabled }) {
+  const isDhcp = config.mode === 'dhcp';
+
+  return (
+    <div className="interface-config-form">
+      <h6 className="interface-config-title">{ifaceName}</h6>
+      <Form.Check
+        type="radio"
+        id={`${ifaceName}-dhcp`}
+        name={`${ifaceName}-mode`}
+        label="DHCP"
+        checked={isDhcp}
+        disabled={disabled}
+        onChange={() => onChange({ mode: 'dhcp' })}
+        className="mb-1"
+      />
+      <Form.Check
+        type="radio"
+        id={`${ifaceName}-static`}
+        name={`${ifaceName}-mode`}
+        label="Static IP"
+        checked={!isDhcp}
+        disabled={disabled}
+        onChange={() => onChange({ mode: 'static' })}
+        className="mb-3"
+      />
+      <Row>
+        <Col sm={6}>
+          <Form.Group className="mb-2">
+            <Form.Label>IP Address</Form.Label>
+            <Form.Control
+              value={config.ipAddress || ''}
+              disabled={disabled || isDhcp}
+              onChange={(e) => onChange({ ipAddress: e.target.value })}
+            />
+          </Form.Group>
+        </Col>
+        <Col sm={6}>
+          <Form.Group className="mb-2">
+            <Form.Label>Subnet / CIDR</Form.Label>
+            <Form.Control
+              value={config.cidr || ''}
+              disabled={disabled || isDhcp}
+              onChange={(e) => onChange({ cidr: e.target.value })}
+              placeholder="255.255.255.0"
+            />
+          </Form.Group>
+        </Col>
+      </Row>
+      <Row>
+        <Col sm={6}>
+          <Form.Group className="mb-2">
+            <Form.Label>Gateway</Form.Label>
+            <Form.Control
+              value={config.gateway || ''}
+              disabled={disabled || isDhcp}
+              onChange={(e) => onChange({ gateway: e.target.value })}
+            />
+          </Form.Group>
+        </Col>
+        <Col sm={6}>
+          <Form.Group className="mb-2">
+            <Form.Label>DNS 1</Form.Label>
+            <Form.Control
+              value={config.dns1 || ''}
+              disabled={disabled || isDhcp}
+              onChange={(e) => onChange({ dns1: e.target.value })}
+            />
+          </Form.Group>
+        </Col>
+      </Row>
+      <Form.Group className="mb-2">
+        <Form.Label>DNS 2</Form.Label>
+        <Form.Control
+          value={config.dns2 || ''}
+          disabled={disabled || isDhcp}
+          onChange={(e) => onChange({ dns2: e.target.value })}
+        />
+      </Form.Group>
+    </div>
+  );
+}
+
 export default function NetworkPage() {
   const [data, setData] = useState(null);
   const [form, setForm] = useState(null);
   const [message, setMessage] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [showApplyWarning, setShowApplyWarning] = useState(false);
 
   const load = () => api.getNetworkStatus().then((status) => {
     setData(status);
     setForm({
-      ethernet: { ...status.ethernet },
-      wifi: { ...status.wifi },
-      hostname: status.hostname,
+      hostname: status.saved?.hostname || status.hostname,
+      eth0: { ...status.saved?.interfaces?.eth0 },
+      wlan0: { ...status.saved?.interfaces?.wlan0 },
     });
   });
 
   useEffect(() => { load().catch(console.error); }, []);
 
-  const updateEthernet = (field, value) => {
+  const updateIface = (iface, patch) => {
     setForm((prev) => ({
       ...prev,
-      ethernet: { ...prev.ethernet, [field]: value },
-    }));
-  };
-
-  const updateWifi = (field, value) => {
-    setForm((prev) => ({
-      ...prev,
-      wifi: { ...prev.wifi, [field]: value },
+      [iface]: { ...prev[iface], ...patch },
     }));
   };
 
@@ -43,19 +120,39 @@ export default function NetworkPage() {
     try {
       const result = await api.saveNetworkSettings(form);
       setData(result.data);
-      setMessage({ type: 'success', text: 'Network settings saved.' });
+      setMessage({ type: 'success', text: 'Network settings saved to appliance configuration.' });
+      load();
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleApply = async () => {
+    if (!showApplyWarning) {
+      setShowApplyWarning(true);
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await api.applyNetworkSettings();
+      setMessage({ type: 'info', text: result.message });
+      load();
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+      setShowApplyWarning(false);
     }
   };
 
   const handleRestart = async () => {
+    if (!window.confirm('Restart network services? This may briefly disconnect this session.')) return;
     setLoading(true);
     try {
       const result = await api.restartNetwork();
-      setMessage({ type: 'success', text: result.message });
+      setMessage({ type: result.success ? 'success' : 'error', text: result.message });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -63,13 +160,30 @@ export default function NetworkPage() {
     }
   };
 
-  const handleTest = async () => {
+  const handleTestGateway = async () => {
     setLoading(true);
     try {
-      const result = await api.testConnectivity();
+      const result = await api.testGatewayPing();
       setMessage({
-        type: 'success',
-        text: `Connectivity OK — ${result.target} @ ${result.latencyMs}ms, packet loss ${result.packetLoss}%`,
+        type: result.success ? 'success' : 'error',
+        text: result.success
+          ? `Gateway ping OK — ${result.target} @ ${result.latencyMs}ms`
+          : `Gateway ping failed — ${result.error || 'unreachable'}`,
+      });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTestDns = async () => {
+    setLoading(true);
+    try {
+      const result = await api.testDns();
+      setMessage({
+        type: result.success ? 'success' : 'error',
+        text: result.success ? `DNS test OK — ${result.dns || result.target}` : 'DNS test failed',
       });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
@@ -80,135 +194,75 @@ export default function NetworkPage() {
 
   if (!form || !data) return <div className="loading-state">Loading network configuration…</div>;
 
+  const liveInterfaces = data.live?.interfaces || [];
+  const applyStatus = data.applyStatus || data.saved?.applyStatus || 'none';
+
   return (
     <>
-      <PageHeader title="Network" subtitle="Ethernet, WiFi, and hostname configuration" />
+      <PageHeader title="Network" subtitle="Live interface status and staged network configuration" />
 
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : 'error'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : message.type === 'info' ? 'info' : 'error'}`}>
           {message.text}
+        </div>
+      )}
+
+      {showApplyWarning && (
+        <div className="alert-sentry alert-sentry-warn">
+          Changing IP settings may disconnect this session. Apply saves staged config only — OS-level changes are not automated in DEV-1.
+          {' '}
+          <button type="button" className="btn btn-sentry-danger btn-sm ms-2" onClick={handleApply} disabled={loading}>
+            Confirm Apply
+          </button>
+          <button type="button" className="btn btn-sentry-secondary btn-sm ms-2" onClick={() => setShowApplyWarning(false)}>
+            Cancel
+          </button>
         </div>
       )}
 
       <Row>
         <Col lg={6}>
-          <PanelCard title="Ethernet — eth0">
-            <div className="kv-row">
-              <span className="kv-label">Link Status</span>
-              <span className="kv-value"><StatusBadge status={data.ethernet.status} label={data.ethernet.linkSpeed} /></span>
-            </div>
-            <KvRow label="MAC Address" value={data.ethernet.mac} />
-            <KvRow label="Current IP" value={data.currentIp} />
-
-            <Form className="mt-3">
-              <Form.Check
-                type="switch"
-                id="dhcp"
-                label="DHCP Enabled"
-                checked={form.ethernet.dhcpEnabled}
-                onChange={(e) => updateEthernet('dhcpEnabled', e.target.checked)}
-                className="mb-3"
-              />
-              <Row>
-                <Col sm={6}>
-                  <Form.Group className="mb-2">
-                    <Form.Label>Static IP</Form.Label>
-                    <Form.Control
-                      value={form.ethernet.staticIp}
-                      disabled={form.ethernet.dhcpEnabled}
-                      onChange={(e) => updateEthernet('staticIp', e.target.value)}
-                    />
-                  </Form.Group>
-                </Col>
-                <Col sm={6}>
-                  <Form.Group className="mb-2">
-                    <Form.Label>Subnet Mask</Form.Label>
-                    <Form.Control
-                      value={form.ethernet.subnetMask}
-                      disabled={form.ethernet.dhcpEnabled}
-                      onChange={(e) => updateEthernet('subnetMask', e.target.value)}
-                    />
-                  </Form.Group>
-                </Col>
-              </Row>
-              <Row>
-                <Col sm={6}>
-                  <Form.Group className="mb-2">
-                    <Form.Label>Gateway</Form.Label>
-                    <Form.Control
-                      value={form.ethernet.gateway}
-                      onChange={(e) => updateEthernet('gateway', e.target.value)}
-                    />
-                  </Form.Group>
-                </Col>
-                <Col sm={6}>
-                  <Form.Group className="mb-2">
-                    <Form.Label>DNS</Form.Label>
-                    <Form.Control
-                      value={(form.ethernet.dns || []).join(', ')}
-                      onChange={(e) => updateEthernet('dns', e.target.value.split(',').map((s) => s.trim()))}
-                    />
-                  </Form.Group>
-                </Col>
-              </Row>
-            </Form>
+          <PanelCard title="Current Live Network">
+            {liveInterfaces.map((iface) => (
+              <div key={iface.name} className="mb-2">
+                <KvRow
+                  label={iface.name}
+                  value={(
+                    <>
+                      <StatusBadge status={iface.status} label={iface.operstate || iface.status} />
+                      {iface.ipv4 && <span className="mono ms-2">{iface.ipv4}</span>}
+                    </>
+                  )}
+                />
+                {iface.mac && <KvRow label="MAC" value={iface.mac} />}
+              </div>
+            ))}
+            <KvRow label="Hostname (live)" value={data.live?.hostname} />
+            <KvRow label="Primary IP" value={data.currentIp || '—'} />
           </PanelCard>
         </Col>
 
         <Col lg={6}>
-          <PanelCard title="WiFi">
-            <Form.Check
-              type="switch"
-              id="wifi-enabled"
-              label="WiFi Enabled"
-              checked={form.wifi.enabled}
-              onChange={(e) => updateWifi('enabled', e.target.checked)}
-              className="mb-3"
-            />
-            <Form.Group className="mb-2">
-              <Form.Label>SSID</Form.Label>
-              <Form.Control
-                value={form.wifi.ssid}
-                disabled={!form.wifi.enabled}
-                onChange={(e) => updateWifi('ssid', e.target.value)}
-              />
-            </Form.Group>
-            <Row>
-              <Col sm={6}>
-                <Form.Group className="mb-2">
-                  <Form.Label>IP Address</Form.Label>
-                  <Form.Control
-                    value={form.wifi.ipAddress}
-                    disabled={!form.wifi.enabled}
-                    onChange={(e) => updateWifi('ipAddress', e.target.value)}
-                  />
-                </Form.Group>
-              </Col>
-              <Col sm={6}>
-                <Form.Group className="mb-2">
-                  <Form.Label>Signal Strength</Form.Label>
-                  <Form.Control
-                    value={form.wifi.signalStrength ? `${form.wifi.signalStrength}%` : 'N/A'}
-                    disabled
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-            <div className="kv-row mt-2">
-              <span className="kv-label">Status</span>
-              <span className="kv-value"><StatusBadge status={data.wifi.status} /></span>
-            </div>
-          </PanelCard>
-
-          <PanelCard title="Hostname">
-            <Form.Group className="mb-2">
+          <PanelCard title="Saved Desired Configuration">
+            <KvRow label="Apply Status" value={<StatusBadge status={applyStatus} label={applyStatus} />} />
+            <KvRow label="Saved At" value={data.saved?.savedAt ? new Date(data.saved.savedAt).toLocaleString() : '—'} />
+            <Form.Group className="mb-3 mt-2">
               <Form.Label>Hostname</Form.Label>
               <Form.Control
                 value={form.hostname}
                 onChange={(e) => setForm((prev) => ({ ...prev, hostname: e.target.value }))}
               />
             </Form.Group>
-            <KvRow label="Local URL" value={`http://${form.hostname}.local`} />
+            <InterfaceConfigForm
+              ifaceName="eth0"
+              config={form.eth0}
+              onChange={(patch) => updateIface('eth0', patch)}
+            />
+            <InterfaceConfigForm
+              ifaceName="wlan0"
+              config={form.wlan0}
+              onChange={(patch) => updateIface('wlan0', patch)}
+            />
           </PanelCard>
         </Col>
       </Row>
@@ -217,11 +271,17 @@ export default function NetworkPage() {
         <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
           Save Network Settings
         </button>
+        <button type="button" className="btn btn-sentry-secondary" onClick={handleApply} disabled={loading}>
+          Apply Network Settings
+        </button>
         <button type="button" className="btn btn-sentry-secondary" onClick={handleRestart} disabled={loading}>
           Restart Network
         </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleTest} disabled={loading}>
-          Test Connectivity
+        <button type="button" className="btn btn-sentry-secondary" onClick={handleTestGateway} disabled={loading}>
+          Test Gateway Ping
+        </button>
+        <button type="button" className="btn btn-sentry-secondary" onClick={handleTestDns} disabled={loading}>
+          Test DNS
         </button>
       </div>
     </>

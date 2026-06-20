@@ -3,6 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', end: true, icon: 'dashboard' },
   { to: '/devices', label: 'Devices', icon: 'devices' },
+  { to: '/network', label: 'Network', icon: 'network' },
   { to: '/bacnet', label: 'BACnet', icon: 'bacnet' },
   { to: '/modbus', label: 'Modbus', icon: 'modbus' },
   { to: '/mqtt', label: 'MQTT', icon: 'mqtt' },
@@ -21,6 +22,11 @@ function NavIcon({ name }) {
     devices: (
       <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
         <path d="M4 3h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1zm2 3v2h8V6H6zm0 4v2h5v-2H6z" />
+      </svg>
+    ),
+    network: (
+      <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path d="M3 6h14v2H3V6zm2 4h10v2H5v-2zm2 4h6v2H7v-2z" />
       </svg>
     ),
     bacnet: (

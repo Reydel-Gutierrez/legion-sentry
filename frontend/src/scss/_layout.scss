@@ -814,6 +814,118 @@ body {
   color: lighten($accent, 12%);
 }
 
+.alert-sentry-info {
+  border-color: rgba($accent, 0.35);
+  background: rgba($accent, 0.06);
+  color: lighten($accent, 12%);
+}
+
+.alert-sentry-warn {
+  border-color: rgba(#e6a817, 0.35);
+  background: rgba(#e6a817, 0.08);
+  color: #f0c040;
+}
+
+.default-password-banner {
+  .banner-link {
+    color: inherit;
+    text-decoration: underline;
+    margin-left: 0.35rem;
+  }
+}
+
+.login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, $bg-base 0%, darken($bg-base, 2%) 100%);
+  padding: 2rem;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  background: $bg-elevated;
+  border: 1px solid $panel-border;
+  border-radius: $radius-md;
+  padding: 2rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 1.5rem;
+
+  .brand-mark {
+    width: 44px;
+    height: 44px;
+    border-radius: $radius-md;
+    background: linear-gradient(135deg, $accent-deep 0%, $accent 100%);
+    color: #1a1200;
+    font-weight: 800;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .brand-logo {
+    font-size: 0.65rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: $accent;
+    font-weight: 600;
+  }
+
+  .brand-product {
+    font-size: 1rem;
+    font-weight: 600;
+    color: $text-white;
+  }
+
+  .brand-code {
+    font-size: 0.7rem;
+    color: $text-muted;
+    font-family: monospace;
+  }
+}
+
+.login-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0 0 0.25rem;
+  color: $text-white;
+}
+
+.login-subtitle {
+  color: $text-muted;
+  font-size: 0.8rem;
+  margin-bottom: 1.5rem;
+}
+
+.login-footnote {
+  margin-top: 1.25rem;
+  margin-bottom: 0;
+  font-size: 0.75rem;
+  color: $text-muted;
+  text-align: center;
+}
+
+.topbar-logout {
+  margin-left: 0.5rem;
+}
+
+.interface-config-title {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: $text-muted;
+  margin: 1rem 0 0.5rem;
+}
+
 .loading-state {
   color: $text-muted;
   padding: 3rem 2rem;

@@ -1,9 +1,11 @@
-import { Link, useLocation } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import StatusBadge from '../common/StatusBadge';
 
 const ROUTE_LABELS = {
   '/': 'Dashboard',
   '/devices': 'Devices',
+  '/network': 'Network',
   '/bacnet': 'BACnet',
   '/modbus': 'Modbus',
   '/mqtt': 'MQTT',
@@ -26,20 +28,20 @@ function runtimeBadgeProps(runtimeMode) {
 
 export default function TopBar({ topBar }) {
   const location = useLocation();
+  const { logout } = useAuth();
   const pageLabel = getPageLabel(location.pathname);
   const runtimeBadge = topBar ? runtimeBadgeProps(topBar.runtimeMode) : null;
+
+  const handleLogout = async () => {
+    await logout();
+    window.location.href = '/login';
+  };
 
   return (
     <>
       <header className="app-topbar">
         <div className="topbar-left">
           <nav className="topbar-breadcrumb" aria-label="Breadcrumb">
-            <Link to="/" className="breadcrumb-home" title="Dashboard">
-              <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14" aria-hidden="true">
-                <path d="M10 3l7 6v8H3V9l7-6zm0 2.3L5 10.2V15h3v-4h4v4h3v-4.8L10 5.3z" />
-              </svg>
-            </Link>
-            <span className="breadcrumb-sep">/</span>
             <span className="breadcrumb-device">{topBar?.hostname || 'Sentry G1'}</span>
             <span className="breadcrumb-sep">/</span>
             <span className="breadcrumb-current">{pageLabel}</span>
@@ -59,6 +61,13 @@ export default function TopBar({ topBar }) {
                 <span className="label">IP</span>
                 <span className="value">{topBar.ip}</span>
               </div>
+              <div className="topbar-stat">
+                <span className="label">Uptime</span>
+                <span className="value">{topBar.uptime}</span>
+              </div>
+              <button type="button" className="btn btn-sentry-secondary btn-sm topbar-logout" onClick={handleLogout}>
+                Logout
+              </button>
             </>
           )}
         </div>
@@ -68,8 +77,8 @@ export default function TopBar({ topBar }) {
         <div className="app-statusbar">
           <div className="statusbar-left">
             <span className="statusbar-item">
-              <span className="statusbar-label">Uptime</span>
-              <span className="statusbar-value">{topBar.uptime}</span>
+              <span className="statusbar-label">Product</span>
+              <span className="statusbar-value mono">{topBar.productCode}</span>
             </span>
             {topBar.liveDataNote && (
               <span className="statusbar-item statusbar-note">
@@ -78,8 +87,8 @@ export default function TopBar({ topBar }) {
             )}
           </div>
           <div className="statusbar-right">
-            <span className="statusbar-label">Product</span>
-            <span className="statusbar-value mono">{topBar.productCode}</span>
+            <span className="statusbar-label">Legion Controls</span>
+            <span className="statusbar-value">{topBar.productName || 'Sentry G1'}</span>
           </div>
         </div>
       )}

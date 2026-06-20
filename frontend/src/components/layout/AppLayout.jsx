@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { api } from '../../api/client';
+import DefaultPasswordBanner from '../auth/DefaultPasswordBanner';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import Footer from './Footer';
@@ -26,6 +27,7 @@ export default function AppLayout() {
       <div className="app-main">
         <TopBar topBar={topBar} />
         <main className="app-content">
+          <DefaultPasswordBanner />
           <Outlet />
         </main>
         <Footer topBar={topBar} />

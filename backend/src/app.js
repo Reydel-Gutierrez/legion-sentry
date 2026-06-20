@@ -3,6 +3,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 
+const requireAuth = require('./middleware/requireAuth');
+const authRoutes = require('./routes/auth');
 const systemRoutes = require('./routes/system');
 const networkRoutes = require('./routes/network');
 const bacnetRoutes = require('./routes/bacnet');
@@ -16,13 +18,17 @@ const interfacesRoutes = require('./routes/interfaces');
 const app = express();
 
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 app.use(morgan('dev'));
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'legion-sentry-api' });
 });
+
+app.use('/api/auth', authRoutes);
+
+app.use(requireAuth);
 
 app.use('/api/system', systemRoutes);
 app.use('/api/network', networkRoutes);

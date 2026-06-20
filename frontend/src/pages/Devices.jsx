@@ -87,6 +87,27 @@ export default function DevicesPage() {
     }
   };
 
+  const handleDiscoverMstp = () => {
+    setMessage({
+      type: 'info',
+      text: 'BACnet MS/TP discovery is not implemented yet. Use RS485 Diagnostics to validate serial traffic first.',
+    });
+  };
+
+  const handleClear = async () => {
+    if (!window.confirm('Clear entire device inventory? This cannot be undone.')) return;
+    setLoading(true);
+    try {
+      await api.clearDevices();
+      setDevices([]);
+      setMessage({ type: 'success', text: 'Device inventory cleared.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <>
       <PageHeader
@@ -159,13 +180,16 @@ export default function DevicesPage() {
 
       <div className="action-bar">
         <button type="button" className="btn btn-sentry-secondary" onClick={handleRefresh} disabled={loading}>
-          Refresh Health
+          Refresh
         </button>
         <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverIp} disabled={loading}>
           Discover BACnet/IP
         </button>
-        <button type="button" className="btn btn-sentry-secondary" disabled title="BACnet MS/TP discovery not implemented yet">
-          BACnet MS/TP discovery not implemented yet
+        <button type="button" className="btn btn-sentry-secondary" onClick={handleDiscoverMstp} disabled={loading}>
+          Discover BACnet MS/TP
+        </button>
+        <button type="button" className="btn btn-sentry-danger" onClick={handleClear} disabled={loading || devices.length === 0}>
+          Clear Inventory
         </button>
       </div>
     </>

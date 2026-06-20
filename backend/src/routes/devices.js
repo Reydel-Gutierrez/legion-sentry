@@ -8,13 +8,19 @@ router.get('/', (_req, res) => {
   res.json(deviceService.getDevices());
 });
 
+router.post('/clear', (_req, res) => {
+  const result = deviceService.clearInventory();
+  logsService.addLog({ level: 'info', service: 'bacnet', message: 'Device inventory cleared' });
+  res.json(result);
+});
+
 router.post('/refresh', async (_req, res, next) => {
   try {
     const result = await deviceService.refreshDevices();
     logsService.addLog({
       level: 'info',
       service: 'bacnet',
-      message: `Device health refresh complete — ${result.devices.length} devices checked, ${result.summary?.online ?? 0} online`,
+      message: `Device inventory refreshed — ${result.devices.length} devices checked, ${result.summary?.online ?? 0} online`,
     });
     res.json(result);
   } catch (err) {

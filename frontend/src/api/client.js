@@ -2,6 +2,7 @@ const API_BASE = '/api';
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...options.headers,
@@ -11,24 +12,42 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.error || `Request failed: ${response.status}`);
+    const err = new Error(error.error || `Request failed: ${response.status}`);
+    err.code = error.code;
+    err.status = response.status;
+    throw err;
   }
 
   return response.json();
 }
 
 export const api = {
+  login: (username, password) => request('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  }),
+  logout: () => request('/auth/logout', { method: 'POST' }),
+  getSession: () => request('/auth/session'),
+  changePassword: (currentPassword, newPassword) => request('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  }),
   getSystemStatus: () => request('/system/status'),
   getSystemInfo: () => request('/system/info'),
   getNetworkStatus: () => request('/network/status'),
+  getNetworkInterfaces: () => request('/interfaces/network'),
   saveNetworkSettings: (data) => request('/network/settings', { method: 'POST', body: JSON.stringify(data) }),
+  applyNetworkSettings: () => request('/network/apply', { method: 'POST' }),
   restartNetwork: () => request('/network/restart', { method: 'POST' }),
   testConnectivity: () => request('/network/test', { method: 'POST' }),
+  testGatewayPing: () => request('/network/test-gateway', { method: 'POST' }),
+  testDns: () => request('/network/test-dns', { method: 'POST' }),
   getDevices: () => request('/devices'),
   getDevice: (id) => request(`/devices/${id}`),
   getDeviceHealth: (id) => request(`/devices/${id}/health`),
   getDeviceObjects: (id) => request(`/devices/${id}/objects`),
   deleteDevice: (id) => request(`/devices/${id}`, { method: 'DELETE' }),
+  clearDevices: () => request('/devices/clear', { method: 'POST' }),
   discoverBacnetIp: (timeoutMs = 5000) => request('/bacnet/ip/discover', {
     method: 'POST',
     body: JSON.stringify({ timeoutMs }),
@@ -56,5 +75,7 @@ export const api = {
   getSerialDetail: () => request('/interfaces/serial/detail'),
   configureSerial: (data) => request('/interfaces/serial/configure', { method: 'POST', body: JSON.stringify(data) }),
   openSerialCheck: (data) => request('/interfaces/serial/open-check', { method: 'POST', body: JSON.stringify(data) }),
-  getNetworkInterfaces: () => request('/interfaces/network'),
+  startSerialMonitor: (data) => request('/interfaces/serial/monitor/start', { method: 'POST', body: JSON.stringify(data) }),
+  getSerialMonitorStatus: () => request('/interfaces/serial/monitor/status'),
+  stopSerialMonitor: () => request('/interfaces/serial/monitor/stop', { method: 'POST' }),
 };

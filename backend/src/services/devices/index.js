@@ -55,7 +55,9 @@ function normalizeDeviceForApi(device) {
     ...device,
     vendor: device.vendorName || device.vendor,
     model: device.modelName || device.model,
-    network: device.transport === 'mstp' ? 'BACnet MS/TP' : 'BACnet/IP',
+    network: device.transport === 'BACnet/IP' || device.transport === 'mstp'
+      ? (device.transport === 'mstp' ? 'BACnet MS/TP' : 'BACnet/IP')
+      : (device.transport === 'mstp' ? 'BACnet MS/TP' : 'BACnet/IP'),
     lastSeen: device.lastSeenAt || device.lastSeen,
     firmware: device.firmwareRevision || device.firmware || null,
   };
@@ -132,10 +134,10 @@ function mapDiscoveredToInventory(discovered, source = 'bacnet-ip-discovery') {
   const now = new Date().toISOString();
   return {
     id: inventory.generateDeviceId('bacnet-ip', discovered.deviceInstance, discovered.address),
-    protocol: 'bacnet-ip',
-    transport: 'ip',
+    protocol: 'BACnet',
+    transport: 'BACnet/IP',
     deviceInstance: discovered.deviceInstance,
-    objectName: discovered.objectName || `Device ${discovered.deviceInstance}`,
+    objectName: discovered.objectName || null,
     vendorName: discovered.vendorName || null,
     modelName: discovered.modelName || null,
     address: discovered.address,
@@ -270,7 +272,7 @@ async function refreshDevices() {
       continue;
     }
 
-    if (device.protocol === 'bacnet-ip' && device.address) {
+    if ((device.protocol === 'bacnet-ip' || device.protocol === 'BACnet') && device.address) {
       try {
         const health = await bacnetIpService.readObjectName({
           address: device.address,

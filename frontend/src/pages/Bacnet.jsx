@@ -229,6 +229,13 @@ export default function BacnetPage() {
                   </div>
                   <KvRow label="Recommended Port" value={recommendedPort?.path || '/dev/serial0'} />
                   <KvRow
+                    label="Monitor Status"
+                    value={data.mstp.monitor?.running ? 'Running' : 'Stopped'}
+                  />
+                  {data.mstp.monitor?.running && (
+                    <KvRow label="RX Bytes" value={data.mstp.monitor.rxBytes ?? 0} />
+                  )}
+                  <KvRow
                     label="Serial Port Open Status"
                     value={(
                       <StatusBadge

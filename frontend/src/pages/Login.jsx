@@ -35,45 +35,49 @@ export default function LoginPage() {
 
   return (
     <div className="login-page">
-      <div className="login-card">
-        <div className="login-brand">
-          <BrandIdentity size="login" textClassName="login-brand-text" className="brand-identity--login" />
-        </div>
+      <div className="login-shell">
+        <aside className="login-brand-panel" aria-label="Product branding">
+          <BrandIdentity
+            size="login"
+            textClassName="login-brand-text"
+            className="brand-identity--login-panel"
+          />
+        </aside>
 
-        <div className="login-header">
+        <main className="login-form-panel">
           <h1 className="login-title">Sign In</h1>
-        </div>
 
-        {error && (
-          <div className="alert-sentry alert-sentry-error login-error">{error}</div>
-        )}
+          {error && (
+            <div className="alert-sentry alert-sentry-error login-error">{error}</div>
+          )}
 
-        <Form className="login-form" onSubmit={handleSubmit}>
-          <Form.Group className="login-field">
-            <Form.Label>Username</Form.Label>
-            <Form.Control
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              autoComplete="username"
-              required
-            />
-          </Form.Group>
-          <Form.Group className="login-field login-field-password">
-            <Form.Label>Password</Form.Label>
-            <Form.Control
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </Form.Group>
-          <div className="login-submit">
-            <button type="submit" className="btn btn-sentry-primary w-100" disabled={submitting}>
-              {submitting ? 'Signing in…' : 'Sign In'}
-            </button>
-          </div>
-        </Form>
+          <Form className="login-form" onSubmit={handleSubmit}>
+            <Form.Group className="login-field">
+              <Form.Label>Username</Form.Label>
+              <Form.Control
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                required
+              />
+            </Form.Group>
+            <Form.Group className="login-field login-field-password">
+              <Form.Label>Password</Form.Label>
+              <Form.Control
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </Form.Group>
+            <div className="login-submit">
+              <button type="submit" className="btn btn-sentry-primary w-100" disabled={submitting}>
+                {submitting ? 'Signing in…' : 'Sign In'}
+              </button>
+            </div>
+          </Form>
+        </main>
       </div>
     </div>
   );

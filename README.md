@@ -89,7 +89,7 @@ All other API routes require authentication except `/api/health` and `/api/syste
 | `/login` | Appliance login |
 | `/` | Dashboard — real Pi metrics, services, serial summary |
 | `/devices` | BACnet device inventory (empty until discovery) |
-| `/network` | Live interfaces + staged network configuration |
+| `/network` | Live interfaces, NetworkManager configuration, hostname, tools |
 | `/bacnet` | BACnet/IP discovery, MS/TP serial settings |
 | `/modbus` | Modbus TCP and RTU settings |
 | `/mqtt` | MQTT broker configuration |
@@ -103,10 +103,13 @@ All other API routes require authentication except `/api/health` and `/api/syste
 |--------|------|-------------|
 | GET | `/api/system/status` | Dashboard data |
 | GET | `/api/system/health` | Health check (public) |
-| GET | `/api/network/status` | Live + saved network config |
-| POST | `/api/network/settings` | Save desired network config |
-| POST | `/api/network/apply` | Stage apply (OS apply not automated) |
-| POST | `/api/network/test-gateway` | Ping saved gateway |
+| GET | `/api/network/status` | Live network status (interfaces, manager, hostname) |
+| GET | `/api/network/manager` | Detected network manager and active connections |
+| POST | `/api/network/apply` | Apply DHCP or static IP via NetworkManager (`nmcli`) |
+| POST | `/api/network/restore-dhcp` | Restore DHCP on `eth0` or `wlan0` |
+| POST | `/api/network/hostname` | Set system hostname (`hostnamectl`) |
+| POST | `/api/network/reboot` | Reboot the appliance |
+| POST | `/api/network/test-gateway` | Ping default gateway |
 | POST | `/api/network/test-dns` | DNS resolution test |
 | GET | `/api/interfaces/serial/detail` | RS485 port details |
 | POST | `/api/interfaces/serial/open-check` | Test serial port open |
@@ -122,11 +125,32 @@ All other API routes require authentication except `/api/health` and `/api/syste
 | File | Purpose |
 |------|---------|
 | `backend/src/data/auth.json` | Hashed credentials (created on first boot) |
-| `backend/src/data/network.json` | Staged network configuration |
 | `backend/src/data/bacnet.json` | BACnet MS/TP settings |
 | `backend/src/data/devices.json` | Discovered device inventory |
 | `backend/src/data/logs.jsonl` | Persistent event logs |
 | `backend/src/data/settings.json` | Protocol settings (BACnet IP, Modbus, MQTT) |
+
+## Network Configuration (Raspberry Pi)
+
+On the Pi, Sentry applies network settings through **NetworkManager** (`nmcli`). The backend runs as user `legion` and requires passwordless `sudo` for network commands.
+
+### Sudoers setup
+
+```bash
+sudo visudo -f /etc/sudoers.d/legion-sentry
+```
+
+Add (verify paths with `which nmcli`, `which hostnamectl`, `which reboot`):
+
+```
+legion ALL=(root) NOPASSWD: /usr/bin/nmcli, /usr/bin/hostnamectl, /usr/sbin/reboot
+```
+
+If command paths differ on your image, adjust accordingly. Without this, apply/hostname/reboot return:
+
+> Sentry does not have permission to apply network settings. Configure sudoers.
+
+On Windows or other dev hosts, network apply endpoints return **501 Unsupported** — the UI remains view-only for live status.
 
 ## Hardware Target (DEV-1)
 

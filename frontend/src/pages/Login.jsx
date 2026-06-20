@@ -37,22 +37,23 @@ export default function LoginPage() {
       <div className="login-card">
         <div className="login-brand">
           <div className="brand-mark">LC</div>
-          <div>
+          <div className="login-brand-text">
             <div className="brand-logo">Legion Controls</div>
             <div className="brand-product">Sentry G1</div>
             <div className="brand-code">LCG1DEV10026</div>
           </div>
         </div>
 
-        <h1 className="login-title">Appliance Login</h1>
-        <p className="login-subtitle">Local device access only</p>
+        <div className="login-header">
+          <h1 className="login-title">Sentry G1 Login</h1>
+        </div>
 
         {error && (
-          <div className="alert-sentry alert-sentry-error">{error}</div>
+          <div className="alert-sentry alert-sentry-error login-error">{error}</div>
         )}
 
-        <Form onSubmit={handleSubmit}>
-          <Form.Group className="mb-3">
+        <Form className="login-form" onSubmit={handleSubmit}>
+          <Form.Group className="login-field">
             <Form.Label>Username</Form.Label>
             <Form.Control
               value={username}
@@ -61,7 +62,7 @@ export default function LoginPage() {
               required
             />
           </Form.Group>
-          <Form.Group className="mb-4">
+          <Form.Group className="login-field login-field-password">
             <Form.Label>Password</Form.Label>
             <Form.Control
               type="password"
@@ -71,14 +72,14 @@ export default function LoginPage() {
               required
             />
           </Form.Group>
-          <button type="submit" className="btn btn-sentry-primary w-100" disabled={submitting}>
-            {submitting ? 'Signing in…' : 'Sign In'}
-          </button>
+          <div className="login-submit">
+            <button type="submit" className="btn btn-sentry-primary w-100" disabled={submitting}>
+              {submitting ? 'Signing in…' : 'Sign In'}
+            </button>
+          </div>
         </Form>
 
-        <p className="login-footnote">
-          Default credentials are configured on first boot. Change password after first login.
-        </p>
+        <p className="login-footer">Secure device access</p>
       </div>
     </div>
   );

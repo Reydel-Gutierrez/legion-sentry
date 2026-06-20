@@ -839,37 +839,40 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, $bg-base 0%, darken($bg-base, 2%) 100%);
+  background: $bg-base;
   padding: 2rem;
 }
 
 .login-card {
   width: 100%;
-  max-width: 420px;
-  background: $bg-elevated;
-  border: 1px solid $panel-border;
+  max-width: 440px;
+  background: $panel;
+  border: 1px solid $panel-border-strong;
   border-radius: $radius-md;
   padding: 2rem;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 .login-brand {
   display: flex;
   align-items: center;
   gap: 0.85rem;
-  margin-bottom: 1.5rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid $panel-border;
 
   .brand-mark {
-    width: 44px;
-    height: 44px;
-    border-radius: $radius-md;
-    background: linear-gradient(135deg, $accent-deep 0%, $accent 100%);
-    color: #1a1200;
-    font-weight: 800;
-    font-size: 0.85rem;
+    width: 42px;
+    height: 42px;
+    border-radius: $radius-sm;
+    background: $panel-deep;
+    border: 1px solid $accent-border;
+    color: $accent;
+    font-weight: 700;
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
   }
 
   .brand-logo {
@@ -878,40 +881,99 @@ body {
     text-transform: uppercase;
     color: $accent;
     font-weight: 600;
+    margin-bottom: 0.1rem;
   }
 
   .brand-product {
-    font-size: 1rem;
+    font-size: 1.05rem;
     font-weight: 600;
     color: $text-white;
+    line-height: 1.2;
   }
 
   .brand-code {
-    font-size: 0.7rem;
+    font-size: 0.68rem;
     color: $text-muted;
-    font-family: monospace;
+    font-family: $font-mono;
+    margin-top: 0.1rem;
   }
 }
 
+.login-header {
+  padding-top: 1.25rem;
+}
+
 .login-title {
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   font-weight: 600;
-  margin: 0 0 0.25rem;
+  margin: 0;
   color: $text-white;
+  letter-spacing: 0.01em;
 }
 
-.login-subtitle {
-  color: $text-muted;
-  font-size: 0.8rem;
-  margin-bottom: 1.5rem;
-}
-
-.login-footnote {
-  margin-top: 1.25rem;
+.login-error {
+  margin-top: 1rem;
   margin-bottom: 0;
-  font-size: 0.75rem;
-  color: $text-muted;
+}
+
+.login-form {
+  margin-top: 1.5rem;
+}
+
+.login-field {
+  margin-bottom: 1rem;
+
+  .form-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+  }
+
+  .form-control {
+    background: $bg-elevated;
+
+    &:focus {
+      box-shadow: none;
+      border-color: $accent-border;
+    }
+  }
+}
+
+.login-field-password {
+  margin-bottom: 0;
+}
+
+.login-submit {
+  margin-top: 1rem;
+
+  .btn-sentry-primary {
+    min-height: 40px;
+    padding: 0.5rem 1rem;
+    font-size: 0.82rem;
+    letter-spacing: 0.02em;
+    background: $accent;
+    border: 1px solid darken($accent, 10%);
+    transition: background 0.15s;
+
+    &:hover:not(:disabled) {
+      filter: none;
+      background: lighten($accent, 4%);
+    }
+
+    &:active:not(:disabled) {
+      transform: none;
+      background: $accent-deep;
+    }
+  }
+}
+
+.login-footer {
+  margin-top: 1.5rem;
+  margin-bottom: 0;
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  color: $text-faint;
   text-align: center;
+  text-transform: uppercase;
 }
 
 .topbar-logout {

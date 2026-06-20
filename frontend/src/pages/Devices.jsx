@@ -4,7 +4,6 @@ import { Table } from 'react-bootstrap';
 import { api } from '../api/client';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
-import PageHeader from '../components/common/PageHeader';
 
 function formatLastSeen(iso) {
   if (!iso) return '—';
@@ -110,18 +109,13 @@ export default function DevicesPage() {
 
   return (
     <>
-      <PageHeader
-        title="Devices"
-        subtitle="Discover and monitor BACnet/IP devices on connected networks"
-      />
-
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'info' ? 'info' : 'success'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'info' ? 'info' : 'success'} mb-3`}>
           {message.text}
         </div>
       )}
 
-      <PanelCard title={`Device Inventory (${devices.length})`}>
+      <PanelCard title="Device Inventory">
         <Table responsive className="sentry-table mb-0">
           <thead>
             <tr>
@@ -140,7 +134,7 @@ export default function DevicesPage() {
             {devices.length === 0 ? (
               <tr>
                 <td colSpan={9} style={{ textAlign: 'center', color: '#58677d' }}>
-                  No devices discovered yet. Run BACnet/IP discovery to scan the local network.
+                  No devices in inventory.
                 </td>
               </tr>
             ) : (
@@ -178,20 +172,22 @@ export default function DevicesPage() {
         </Table>
       </PanelCard>
 
-      <div className="action-bar">
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleRefresh} disabled={loading}>
-          Refresh
-        </button>
-        <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverIp} disabled={loading}>
-          Discover BACnet/IP
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleDiscoverMstp} disabled={loading}>
-          Discover BACnet MS/TP
-        </button>
-        <button type="button" className="btn btn-sentry-danger" onClick={handleClear} disabled={loading || devices.length === 0}>
-          Clear Inventory
-        </button>
-      </div>
+      <PanelCard title="Discovery Actions" className="mt-3">
+        <div className="action-bar">
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleRefresh} disabled={loading}>
+            Refresh
+          </button>
+          <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverIp} disabled={loading}>
+            Discover BACnet/IP
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleDiscoverMstp} disabled={loading}>
+            Discover BACnet MS/TP
+          </button>
+          <button type="button" className="btn btn-sentry-danger" onClick={handleClear} disabled={loading || devices.length === 0}>
+            Clear Inventory
+          </button>
+        </div>
+      </PanelCard>
     </>
   );
 }

@@ -2,8 +2,7 @@ import { useState } from 'react';
 import { Form } from 'react-bootstrap';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import BrandIdentity from '../components/common/BrandIdentity';
-import { getLoginTitle } from '../config/branding';
+import { BRANDING } from '../config/branding';
 
 export default function LoginPage() {
   const { login, isAuthenticated, loading } = useAuth();
@@ -38,11 +37,15 @@ export default function LoginPage() {
     <div className="login-page">
       <div className="login-card">
         <div className="login-brand">
-          <BrandIdentity size="login" textClassName="login-brand-text" />
+          <div className="login-brand-text">
+            <div className="brand-logo">{BRANDING.manufacturer}</div>
+            <div className="brand-product">{BRANDING.productName}</div>
+            <div className="brand-code">{BRANDING.productCode}</div>
+          </div>
         </div>
 
         <div className="login-header">
-          <h1 className="login-title">{getLoginTitle()}</h1>
+          <h1 className="login-title">Sign In</h1>
         </div>
 
         {error && (
@@ -75,8 +78,6 @@ export default function LoginPage() {
             </button>
           </div>
         </Form>
-
-        <p className="login-footer">Secure device access</p>
       </div>
     </div>
   );

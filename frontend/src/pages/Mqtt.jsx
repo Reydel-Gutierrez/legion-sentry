@@ -4,7 +4,6 @@ import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
-import PageHeader from '../components/common/PageHeader';
 import LoadingState from '../components/common/LoadingState';
 
 export default function MqttPage() {
@@ -78,10 +77,8 @@ export default function MqttPage() {
 
   return (
     <>
-      <PageHeader title="MQTT" subtitle="MQTT client broker and topic configuration" />
-
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : 'error'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : 'error'} mb-3`}>
           {message.text}
         </div>
       )}
@@ -168,17 +165,19 @@ export default function MqttPage() {
         </Col>
       </Row>
 
-      <div className="action-bar">
-        <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
-          Save MQTT Settings
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleTest} disabled={loading}>
-          Test Connection
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handlePublish} disabled={loading}>
-          Publish Test Message
-        </button>
-      </div>
+      <PanelCard title="MQTT Actions" className="mt-3">
+        <div className="action-bar">
+          <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
+            Save MQTT Settings
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleTest} disabled={loading}>
+            Test Connection
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handlePublish} disabled={loading}>
+            Publish Test Message
+          </button>
+        </div>
+      </PanelCard>
     </>
   );
 }

@@ -7,7 +7,6 @@ import MetricBar from '../components/common/MetricBar';
 import PanelCard from '../components/common/PanelCard';
 import ServiceStatusRow from '../components/common/ServiceStatusRow';
 import StatusBadge from '../components/common/StatusBadge';
-import PageHeader from '../components/common/PageHeader';
 import LoadingState from '../components/common/LoadingState';
 
 function formatTimestamp(iso) {
@@ -47,49 +46,48 @@ export default function DashboardPage() {
 
   return (
     <>
-      <PageHeader
-        title="Dashboard"
-        subtitle="Live hardware status, service configuration, and device overview"
-      />
-
       {topBar?.liveDataNote && (
-        <div className="alert-sentry alert-sentry-info mb-3">{topBar.liveDataNote}</div>
+        <PanelCard title="System Notice" className="mb-3">
+          <p className="mb-0" style={{ color: '#8fa3bc' }}>{topBar.liveDataNote}</p>
+        </PanelCard>
       )}
 
-      <Row className="g-3 mb-3">
-        <Col sm={6} lg={3}>
-          <div className="stat-card">
-            <div className="stat-card-label">BACnet Devices</div>
-            <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
-              {deviceStat(devices.bacnetDevices, devices.scanned)}
+      <PanelCard title="Device Counts" className="mb-3">
+        <Row className="g-3">
+          <Col sm={6} lg={3}>
+            <div className="stat-card">
+              <div className="stat-card-label">BACnet Devices</div>
+              <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
+                {deviceStat(devices.bacnetDevices, devices.scanned)}
+              </div>
             </div>
-          </div>
-        </Col>
-        <Col sm={6} lg={3}>
-          <div className="stat-card stat-card--success">
-            <div className="stat-card-label">Online Devices</div>
-            <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
-              {deviceStat(devices.onlineDevices, devices.scanned)}
+          </Col>
+          <Col sm={6} lg={3}>
+            <div className="stat-card stat-card--success">
+              <div className="stat-card-label">Online Devices</div>
+              <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
+                {deviceStat(devices.onlineDevices, devices.scanned)}
+              </div>
             </div>
-          </div>
-        </Col>
-        <Col sm={6} lg={3}>
-          <div className="stat-card stat-card--danger">
-            <div className="stat-card-label">Offline Devices</div>
-            <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
-              {deviceStat(devices.offlineDevices, devices.scanned)}
+          </Col>
+          <Col sm={6} lg={3}>
+            <div className="stat-card stat-card--danger">
+              <div className="stat-card-label">Offline Devices</div>
+              <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
+                {deviceStat(devices.offlineDevices, devices.scanned)}
+              </div>
             </div>
-          </div>
-        </Col>
-        <Col sm={6} lg={3}>
-          <div className="stat-card">
-            <div className="stat-card-label">MS/TP Networks</div>
-            <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
-              {deviceStat(devices.mstpNetworks, devices.scanned)}
+          </Col>
+          <Col sm={6} lg={3}>
+            <div className="stat-card">
+              <div className="stat-card-label">MS/TP Networks</div>
+              <div className={`stat-card-value${!devices.scanned ? ' stat-card-value--muted' : ''}`}>
+                {deviceStat(devices.mstpNetworks, devices.scanned)}
+              </div>
             </div>
-          </div>
-        </Col>
-      </Row>
+          </Col>
+        </Row>
+      </PanelCard>
 
       <Row>
         <Col lg={6}>
@@ -178,7 +176,7 @@ export default function DashboardPage() {
         </Col>
       </Row>
 
-      <PanelCard title="Recent Events">
+      <PanelCard title="Recent Events" className="mt-0">
         {recentEvents.length === 0 ? (
           <p style={{ color: '#58677d', margin: 0 }}>No recent events</p>
         ) : (
@@ -193,7 +191,10 @@ export default function DashboardPage() {
             ))}
           </div>
         )}
-        <div className="action-bar" style={{ marginTop: '0.75rem', paddingTop: '0.75rem' }}>
+      </PanelCard>
+
+      <PanelCard title="Quick Actions" className="mt-3">
+        <div className="action-bar">
           <Link to="/devices" className="btn btn-sentry-primary">View Devices</Link>
           <Link to="/diagnostics" className="btn btn-sentry-secondary">Diagnostics</Link>
           <Link to="/logs" className="btn btn-sentry-secondary">View Logs</Link>

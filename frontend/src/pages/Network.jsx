@@ -4,7 +4,6 @@ import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
-import PageHeader from '../components/common/PageHeader';
 import LoadingState from '../components/common/LoadingState';
 
 function InterfaceConfigForm({ ifaceName, config, onChange, disabled }) {
@@ -200,25 +199,26 @@ export default function NetworkPage() {
 
   return (
     <>
-      <PageHeader title="Network" subtitle="Live interface status and staged network configuration" />
-
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : message.type === 'info' ? 'info' : 'error'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : message.type === 'info' ? 'info' : 'error'} mb-3`}>
           {message.text}
         </div>
       )}
 
       {showApplyWarning && (
-        <div className="alert-sentry alert-sentry-warn">
-          Changing IP settings may disconnect this session. Apply saves staged config only — OS-level changes are not automated in DEV-1.
-          {' '}
-          <button type="button" className="btn btn-sentry-danger btn-sm ms-2" onClick={handleApply} disabled={loading}>
-            Confirm Apply
-          </button>
-          <button type="button" className="btn btn-sentry-secondary btn-sm ms-2" onClick={() => setShowApplyWarning(false)}>
-            Cancel
-          </button>
-        </div>
+        <PanelCard title="Apply Confirmation" className="mb-3">
+          <p className="mb-2" style={{ color: '#8fa3bc' }}>
+            Changing IP settings may disconnect this session. Apply saves staged config only — OS-level changes are not automated in DEV-1.
+          </p>
+          <div className="action-bar">
+            <button type="button" className="btn btn-sentry-danger btn-sm" onClick={handleApply} disabled={loading}>
+              Confirm Apply
+            </button>
+            <button type="button" className="btn btn-sentry-secondary btn-sm" onClick={() => setShowApplyWarning(false)}>
+              Cancel
+            </button>
+          </div>
+        </PanelCard>
       )}
 
       <Row>
@@ -268,23 +268,25 @@ export default function NetworkPage() {
         </Col>
       </Row>
 
-      <div className="action-bar">
-        <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
-          Save Network Settings
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleApply} disabled={loading}>
-          Apply Network Settings
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleRestart} disabled={loading}>
-          Restart Network
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleTestGateway} disabled={loading}>
-          Test Gateway Ping
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleTestDns} disabled={loading}>
-          Test DNS
-        </button>
-      </div>
+      <PanelCard title="Network Actions" className="mt-3">
+        <div className="action-bar">
+          <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
+            Save Network Settings
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleApply} disabled={loading}>
+            Apply Network Settings
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleRestart} disabled={loading}>
+            Restart Network
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleTestGateway} disabled={loading}>
+            Test Gateway Ping
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleTestDns} disabled={loading}>
+            Test DNS
+          </button>
+        </div>
+      </PanelCard>
     </>
   );
 }

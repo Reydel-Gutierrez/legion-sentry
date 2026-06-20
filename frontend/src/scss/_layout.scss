@@ -195,7 +195,7 @@ body {
   }
 }
 
-// ─── Top bar & status strip ──────────────────────────────────────────────────
+// ─── Top bar ─────────────────────────────────────────────────────────────────
 
 .app-topbar {
   height: $topbar-height;
@@ -213,37 +213,6 @@ body {
   align-items: center;
   gap: 0.75rem;
   min-width: 0;
-}
-
-.topbar-breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.8rem;
-
-  .breadcrumb-home {
-    color: $text-muted;
-    display: flex;
-    align-items: center;
-    text-decoration: none;
-
-    &:hover {
-      color: $accent;
-    }
-  }
-
-  .breadcrumb-sep {
-    color: $text-faint;
-  }
-
-  .breadcrumb-device {
-    color: $text-muted;
-  }
-
-  .breadcrumb-current {
-    color: $text-white;
-    font-weight: 500;
-  }
 }
 
 .topbar-right {
@@ -265,66 +234,6 @@ body {
   .value {
     font-family: $font-mono;
     color: $text-white;
-  }
-}
-
-.app-statusbar {
-  height: $statusbar-height;
-  background: rgba($bg-elevated, 0.95);
-  border-bottom: 1px solid $panel-border;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 1.25rem;
-  flex-shrink: 0;
-  font-size: 0.75rem;
-}
-
-.statusbar-left {
-  display: flex;
-  align-items: center;
-  gap: 1.1rem;
-}
-
-.statusbar-right {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-
-  .statusbar-logo {
-    opacity: 0.95;
-  }
-}
-
-.statusbar-item {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-
-.statusbar-note .statusbar-value {
-  color: $text-muted;
-  font-family: inherit;
-  font-style: italic;
-  font-size: 0.72rem;
-}
-
-.statusbar-label {
-  color: $text-muted;
-}
-
-.statusbar-value {
-  color: $text-secondary;
-  font-family: $font-mono;
-
-  &.accent {
-    color: $accent;
-    font-family: inherit;
-    font-weight: 500;
-  }
-
-  &.mono {
-    font-family: $font-mono;
   }
 }
 
@@ -392,70 +301,6 @@ body {
   flex: 1;
   padding: 1.35rem 1.5rem 1.5rem;
   overflow-y: auto;
-}
-
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-bottom: 1.35rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid $panel-border;
-}
-
-.page-header-main {
-  .page-eyebrow {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    margin-bottom: 0.35rem;
-  }
-
-  .page-eyebrow-text {
-    display: flex;
-    flex-direction: column;
-    gap: 0.05rem;
-    line-height: 1.2;
-  }
-
-  .page-eyebrow-manufacturer {
-    font-size: 0.65rem;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: $accent;
-  }
-
-  .page-eyebrow-product {
-    font-size: 0.78rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    color: $text-secondary;
-    text-transform: none;
-  }
-
-  h1 {
-    font-size: 1.35rem;
-    font-weight: 600;
-    margin: 0 0 0.3rem;
-    color: $text-white;
-    letter-spacing: -0.01em;
-  }
-
-  .page-subtitle {
-    color: $text-muted;
-    font-size: 0.82rem;
-    margin: 0;
-    max-width: 52ch;
-  }
-}
-
-.page-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-shrink: 0;
 }
 
 // ─── Cards ───────────────────────────────────────────────────────────────────
@@ -787,11 +632,17 @@ body {
   border-top: 1px solid $panel-border;
 }
 
+.sentry-card .action-bar {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
 .filter-bar {
   display: flex;
   gap: 0.4rem;
   flex-wrap: wrap;
-  margin-bottom: 1rem;
+  margin-bottom: 0;
 
   .filter-btn {
     background: rgba(255, 255, 255, 0.02);
@@ -979,11 +830,6 @@ body {
 }
 
 .loading-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.85rem;
   color: $text-muted;
   padding: 3rem 2rem;
   text-align: center;

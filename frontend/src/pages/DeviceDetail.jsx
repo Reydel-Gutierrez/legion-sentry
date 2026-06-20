@@ -5,7 +5,6 @@ import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
-import PageHeader from '../components/common/PageHeader';
 import LoadingState from '../components/common/LoadingState';
 
 function formatLastSeen(iso) {
@@ -61,18 +60,10 @@ export default function DeviceDetailPage() {
 
   const summary = objects?.objectSummary || {};
   const details = bacnetDetails || {};
+  const deviceTitle = device.objectName || `Device ${device.deviceInstance}`;
 
   return (
     <>
-      <PageHeader
-        title={device.objectName || `Device ${device.deviceInstance}`}
-        subtitle={`Device Instance ${device.deviceInstance} · ${device.network}`}
-      >
-        <Link to="/devices" className="btn btn-sentry-secondary">
-          Back to Devices
-        </Link>
-      </PageHeader>
-
       <Row>
         <Col lg={4}>
           <PanelCard title="Device Information">
@@ -139,17 +130,22 @@ export default function DeviceDetailPage() {
         </Col>
       </Row>
 
-      <div className="action-bar">
-        <button type="button" className="btn btn-sentry-primary" disabled title="Object browser — not implemented in DEV-1">
-          Browse Objects
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" disabled title="Live read — not implemented in DEV-1">
-          Live Read
-        </button>
-        <Link to="/diagnostics" className="btn btn-sentry-secondary">
-          Diagnostics
-        </Link>
-      </div>
+      <PanelCard title={`Actions — ${deviceTitle}`} className="mt-3">
+        <div className="action-bar">
+          <Link to="/devices" className="btn btn-sentry-secondary">
+            Back to Devices
+          </Link>
+          <button type="button" className="btn btn-sentry-primary" disabled title="Object browser — not implemented in DEV-1">
+            Browse Objects
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" disabled title="Live read — not implemented in DEV-1">
+            Live Read
+          </button>
+          <Link to="/diagnostics" className="btn btn-sentry-secondary">
+            Diagnostics
+          </Link>
+        </div>
+      </PanelCard>
     </>
   );
 }

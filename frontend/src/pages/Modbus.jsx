@@ -4,7 +4,6 @@ import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
-import PageHeader from '../components/common/PageHeader';
 import LoadingState from '../components/common/LoadingState';
 
 const BAUD_RATES = [9600, 19200, 38400, 76800, 115200];
@@ -64,10 +63,8 @@ export default function ModbusPage() {
 
   return (
     <>
-      <PageHeader title="Modbus" subtitle="Modbus TCP and RTU gateway configuration" />
-
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : 'error'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : 'error'} mb-3`}>
           {message.text}
         </div>
       )}
@@ -181,17 +178,19 @@ export default function ModbusPage() {
         </Col>
       </Row>
 
-      <div className="action-bar">
-        <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
-          Save Modbus Settings
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleTestRead} disabled={loading}>
-          Test Read Register
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" disabled title="Placeholder — scan not implemented">
-          Discover / Scan Devices
-        </button>
-      </div>
+      <PanelCard title="Modbus Actions" className="mt-3">
+        <div className="action-bar">
+          <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
+            Save Modbus Settings
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleTestRead} disabled={loading}>
+            Test Read Register
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" disabled title="Placeholder — scan not implemented">
+            Discover / Scan Devices
+          </button>
+        </div>
+      </PanelCard>
     </>
   );
 }

@@ -5,7 +5,6 @@ import { useAuth } from '../context/AuthContext';
 import KvRow from '../components/common/KvRow';
 import MetricBar from '../components/common/MetricBar';
 import PanelCard from '../components/common/PanelCard';
-import PageHeader from '../components/common/PageHeader';
 import LoadingState from '../components/common/LoadingState';
 
 export default function SystemPage() {
@@ -55,10 +54,8 @@ export default function SystemPage() {
 
   return (
     <>
-      <PageHeader title="System" subtitle="Device information, security, and maintenance" />
-
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'info' ? 'info' : 'success'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'info' ? 'info' : 'success'} mb-3`}>
           {message.text}
         </div>
       )}

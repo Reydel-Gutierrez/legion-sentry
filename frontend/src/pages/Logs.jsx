@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Table } from 'react-bootstrap';
 import { api } from '../api/client';
 import PanelCard from '../components/common/PanelCard';
-import PageHeader from '../components/common/PageHeader';
 
 const FILTERS = [
   { id: 'all', label: 'All' },
@@ -40,22 +39,22 @@ export default function LogsPage() {
 
   return (
     <>
-      <PageHeader title="Logs" subtitle="System, network, and protocol event log" />
+      <PanelCard title="Log Filter">
+        <div className="filter-bar">
+          {FILTERS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              className={`filter-btn${filter === f.id ? ' active' : ''}`}
+              onClick={() => setFilter(f.id)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </PanelCard>
 
-      <div className="filter-bar">
-        {FILTERS.map((f) => (
-          <button
-            key={f.id}
-            type="button"
-            className={`filter-btn${filter === f.id ? ' active' : ''}`}
-            onClick={() => setFilter(f.id)}
-          >
-            {f.label}
-          </button>
-        ))}
-      </div>
-
-      <PanelCard title={`Log Entries${loading ? ' — refreshing…' : ''}`}>
+      <PanelCard title={`Log Entries${loading ? ' — refreshing…' : ''}`} className="mt-3">
         <Table responsive className="sentry-table mb-0">
           <thead>
             <tr>
@@ -82,17 +81,19 @@ export default function LogsPage() {
         </Table>
       </PanelCard>
 
-      <div className="action-bar">
-        <button type="button" className="btn btn-sentry-secondary" onClick={() => load()} disabled={loading}>
-          Refresh
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" onClick={handleClear} disabled={loading}>
-          Clear
-        </button>
-        <button type="button" className="btn btn-sentry-secondary" disabled title="Download not yet implemented">
-          Download
-        </button>
-      </div>
+      <PanelCard title="Log Actions" className="mt-3">
+        <div className="action-bar">
+          <button type="button" className="btn btn-sentry-secondary" onClick={() => load()} disabled={loading}>
+            Refresh
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleClear} disabled={loading}>
+            Clear
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" disabled title="Download not yet implemented">
+            Download
+          </button>
+        </div>
+      </PanelCard>
     </>
   );
 }

@@ -5,7 +5,6 @@ import KvRow from '../components/common/KvRow';
 import MetricBar from '../components/common/MetricBar';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
-import PageHeader from '../components/common/PageHeader';
 import LoadingState from '../components/common/LoadingState';
 
 function formatTimestamp(iso) {
@@ -136,10 +135,8 @@ export default function DiagnosticsPage() {
 
   return (
     <>
-      <PageHeader title="Diagnostics" subtitle="Hardware, network, RS485 serial, and protocol status" />
-
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'success' ? 'success' : 'info'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'success' ? 'success' : 'info'} mb-3`}>
           {message.text}
         </div>
       )}
@@ -271,7 +268,6 @@ export default function DiagnosticsPage() {
       </Row>
 
       <PanelCard title="GPIO">
-        <p style={{ color: '#58677d', margin: '0 0 0.5rem' }}>GPIO LED/button monitoring not configured in DEV-1.</p>
         {Object.values(gpio || {}).map((item) => (
           <div key={item.name} className="kv-row">
             <span className="kv-label">{item.name}</span>

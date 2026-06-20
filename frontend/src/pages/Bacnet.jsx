@@ -4,7 +4,6 @@ import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
 import PanelCard from '../components/common/PanelCard';
 import StatusBadge from '../components/common/StatusBadge';
-import PageHeader from '../components/common/PageHeader';
 import LoadingState from '../components/common/LoadingState';
 
 const BAUD_RATES = [9600, 19200, 38400, 57600, 76800, 115200];
@@ -129,10 +128,8 @@ export default function BacnetPage() {
 
   return (
     <>
-      <PageHeader title="BACnet" subtitle="BACnet/IP discovery, MS/TP serial interface, and routing status" />
-
       {message && (
-        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : message.type === 'info' ? 'info' : 'error'}`}>
+        <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : message.type === 'info' ? 'info' : 'error'} mb-3`}>
           {message.text}
         </div>
       )}
@@ -201,10 +198,7 @@ export default function BacnetPage() {
               </Col>
               <Col lg={6}>
                 <PanelCard title="BACnet/IP Discovery">
-                  <p style={{ color: '#58677d' }}>
-                    Sends Who-Is on the local BACnet/IP network and listens for I-Am responses.
-                  </p>
-                  <div className="action-bar" style={{ marginTop: '0.75rem', paddingTop: 0 }}>
+                  <div className="action-bar">
                     <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverIp} disabled={loading}>
                       Discover BACnet/IP
                     </button>
@@ -322,20 +316,15 @@ export default function BacnetPage() {
               </Col>
               <Col lg={6}>
                 <PanelCard title="RS485 Port Actions">
-                  <p style={{ color: '#58677d' }}>
-                    Configure and validate the RS485 serial port before MS/TP stack integration.
-                  </p>
-                  <div className="action-bar" style={{ paddingTop: 0 }}>
+                  <div className="action-bar">
                     <button type="button" className="btn btn-sentry-primary" onClick={handleSerialCheck} disabled={loading}>
                       Check RS485 Port
                     </button>
                     <button type="button" className="btn btn-sentry-secondary" onClick={handleApplySerial} disabled={loading}>
                       Apply MS/TP Serial Settings
                     </button>
-                  </div>
-                  <div className="mt-3">
                     <button type="button" className="btn btn-sentry-secondary" disabled title="BACnet MS/TP discovery not implemented yet">
-                      BACnet MS/TP discovery not implemented yet
+                      Discover BACnet MS/TP
                     </button>
                   </div>
                   {serialDetail?.ports && (
@@ -401,11 +390,13 @@ export default function BacnetPage() {
         </Tab.Content>
       </Tab.Container>
 
-      <div className="action-bar">
-        <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
-          Save Settings
-        </button>
-      </div>
+      <PanelCard title="Configuration Actions" className="mt-3">
+        <div className="action-bar">
+          <button type="button" className="btn btn-sentry-primary" onClick={handleSave} disabled={loading}>
+            Save Settings
+          </button>
+        </div>
+      </PanelCard>
     </>
   );
 }

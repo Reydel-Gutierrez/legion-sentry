@@ -18,11 +18,15 @@ function ensureBacnetFile() {
       mstp: settings.mstp || {
         enabled: true,
         serialPort: '/dev/serial0',
-        macAddress: 5,
+        macAddress: 3,
         baudRate: 38400,
         maxMaster: 127,
         maxInfoFrames: 1,
         networkNumber: 2,
+        timeoutMs: 20000,
+        whoIsRetries: 5,
+        retryIntervalMs: 3000,
+        tokenMode: false,
       },
       updatedAt: new Date().toISOString(),
     };

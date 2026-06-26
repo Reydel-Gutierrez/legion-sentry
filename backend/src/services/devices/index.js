@@ -59,15 +59,16 @@ function buildSummary(devices) {
 }
 
 function normalizeDeviceForApi(device) {
+  const mstp = device.transport === 'mstp' || device.transport === 'BACnet MS/TP';
   return {
     ...device,
     vendor: device.vendorName || device.vendor,
     model: device.modelName || device.model,
     network: device.transport === 'BACnet/IP'
       ? 'BACnet/IP'
-      : (device.transport === 'mstp' || device.transport === 'BACnet MS/TP'
-        ? 'BACnet MS/TP'
-        : (device.transport || '—')),
+      : (mstp ? 'BACnet MS/TP' : (device.transport || '—')),
+    configuredNetworkNumber: device.configuredNetworkNumber
+      ?? (mstp ? device.networkNumber : undefined),
     lastSeen: device.lastSeenAt || device.lastSeen,
     firmware: device.firmwareRevision || device.firmware || null,
   };
@@ -189,6 +190,7 @@ function mapMstpDiscoveredToInventory(discovered, source = 'bacnet-mstp-discover
     lastSeenAt: now,
     lastResponseMs: discovered.lastResponseMs ?? null,
     discoverySessionId: discovered.discoverySessionId ?? null,
+    sightings: discovered.sightings ?? 1,
     source,
     vendorId: discovered.vendorId ?? null,
     maxApdu: discovered.maxApdu ?? null,
@@ -222,6 +224,8 @@ function mergeDiscoveredDevices(discoveredList, mapper = mapDiscoveredToInventor
       // Preserve the original first-seen timestamp across rescans.
       firstSeenAt: prev.firstSeenAt || mapped.firstSeenAt,
       lastSeenAt: mapped.lastSeenAt,
+      sightings: (prev.sightings || 0) + (mapped.sightings || 1),
+      discoverySessionId: mapped.discoverySessionId || prev.discoverySessionId,
       status: DEVICE_HEALTH.ONLINE,
     } : mapped);
   }

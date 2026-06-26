@@ -1,5 +1,7 @@
 const os = require('os');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { SerialPort } = require('serialport');
 const { loadSettings } = require('../../lib/settingsStore');
 const serialService = require('../interfaces/serial.service');
@@ -22,11 +24,14 @@ const MSTP_FRAME_TYPE = {
 };
 
 const MSTP_BROADCAST_MAC = 0xff;
+const BACNET_CONFIG_PATH = path.join(__dirname, '../../data/bacnet.json');
 const MAX_LOG_ENTRIES = 500;
 const MAX_FRAME_DATA_LEN = 501;
 const MAX_FRAME_DIAGNOSTICS = 300;
-const DEFAULT_WHO_IS_RETRIES = 3;
-const DEFAULT_RETRY_INTERVAL_MS = 2500;
+const DEFAULT_TIMEOUT_MS = 20000;
+const DEFAULT_WHO_IS_RETRIES = 5;
+const DEFAULT_RETRY_INTERVAL_MS = 3000;
+const TOKEN_PARTICIPATION_IMPLEMENTED = false;
 
 const interfaceState = {
   open: false,
@@ -37,6 +42,10 @@ const interfaceState = {
   maxMaster: null,
   maxInfoFrames: null,
   networkNumber: null,
+  timeoutMs: null,
+  whoIsRetries: null,
+  retryIntervalMs: null,
+  tokenMode: false,
   rxBytes: 0,
   txBytes: 0,
   lastActivityAt: null,
@@ -78,27 +87,48 @@ function addDiscoveryLog(level, message, extra = {}) {
   logMstp(`[${level}] ${message}`, level === 'error' ? 'error' : 'info');
 }
 
+function loadPersistedMstpSettings() {
+  const fromSettings = loadSettings().bacnet?.mstp || {};
+  try {
+    if (fs.existsSync(BACNET_CONFIG_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(BACNET_CONFIG_PATH, 'utf8'));
+      return { ...fromSettings, ...(raw.mstp || {}) };
+    }
+  } catch {
+    // ignore unreadable bacnet.json
+  }
+  return fromSettings;
+}
+
 function getDefaultConfig() {
-  const settings = loadSettings().bacnet?.mstp || {};
+  const settings = loadPersistedMstpSettings();
   return {
     port: settings.serialPort || '/dev/serial0',
     baudRate: settings.baudRate || 38400,
-    macAddress: settings.macAddress ?? 5,
+    macAddress: settings.macAddress ?? 3,
     maxMaster: settings.maxMaster ?? 127,
     maxInfoFrames: settings.maxInfoFrames ?? 1,
     networkNumber: settings.networkNumber ?? 2,
+    timeoutMs: settings.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    whoIsRetries: settings.whoIsRetries ?? DEFAULT_WHO_IS_RETRIES,
+    retryIntervalMs: settings.retryIntervalMs ?? DEFAULT_RETRY_INTERVAL_MS,
+    tokenMode: Boolean(settings.tokenMode),
   };
 }
 
 function normalizeConfig(input = {}) {
   const defaults = getDefaultConfig();
   return {
-    port: input.port || defaults.port,
+    port: input.port || input.serialPort || defaults.port,
     baudRate: Number(input.baudRate ?? defaults.baudRate),
     macAddress: Number(input.macAddress ?? defaults.macAddress),
     maxMaster: Number(input.maxMaster ?? defaults.maxMaster),
     maxInfoFrames: Number(input.maxInfoFrames ?? defaults.maxInfoFrames),
     networkNumber: Number(input.networkNumber ?? defaults.networkNumber),
+    timeoutMs: Number(input.timeoutMs ?? defaults.timeoutMs),
+    whoIsRetries: Number(input.whoIsRetries ?? defaults.whoIsRetries),
+    retryIntervalMs: Number(input.retryIntervalMs ?? defaults.retryIntervalMs),
+    tokenMode: Boolean(input.tokenMode ?? defaults.tokenMode),
   };
 }
 
@@ -113,8 +143,8 @@ function validateConfig(config) {
   serialService.validatePath(config.port);
   serialService.validateBaudRate(config.baudRate);
 
-  if (!Number.isInteger(config.macAddress) || config.macAddress < 0 || config.macAddress > 254) {
-    const error = new Error('macAddress must be an integer between 0 and 254');
+  if (!Number.isInteger(config.macAddress) || config.macAddress < 0 || config.macAddress > 127) {
+    const error = new Error('macAddress must be an integer between 0 and 127');
     error.statusCode = 400;
     error.code = 'INVALID_MAC';
     throw error;
@@ -127,18 +157,63 @@ function validateConfig(config) {
     throw error;
   }
 
+  if (config.maxMaster < config.macAddress) {
+    const error = new Error('maxMaster must be greater than or equal to macAddress');
+    error.statusCode = 400;
+    error.code = 'INVALID_MAX_MASTER';
+    throw error;
+  }
+
+  if (!Number.isInteger(config.maxInfoFrames) || config.maxInfoFrames < 1) {
+    const error = new Error('maxInfoFrames must be an integer >= 1');
+    error.statusCode = 400;
+    error.code = 'INVALID_MAX_INFO_FRAMES';
+    throw error;
+  }
+
+  if (!Number.isFinite(config.timeoutMs) || config.timeoutMs < 1000 || config.timeoutMs > 120000) {
+    const error = new Error('timeoutMs must be between 1000 and 120000');
+    error.statusCode = 400;
+    error.code = 'INVALID_TIMEOUT';
+    throw error;
+  }
+
+  if (!Number.isInteger(config.whoIsRetries) || config.whoIsRetries < 1 || config.whoIsRetries > 20) {
+    const error = new Error('whoIsRetries must be an integer between 1 and 20');
+    error.statusCode = 400;
+    error.code = 'INVALID_WHO_IS_RETRIES';
+    throw error;
+  }
+
+  if (
+    !Number.isFinite(config.retryIntervalMs)
+    || config.retryIntervalMs < 250
+    || config.retryIntervalMs >= config.timeoutMs
+  ) {
+    const error = new Error('retryIntervalMs must be between 250 and less than timeoutMs');
+    error.statusCode = 400;
+    error.code = 'INVALID_RETRY_INTERVAL';
+    throw error;
+  }
+
   return config;
 }
 
 function getStatusSnapshot() {
+  const defaults = getDefaultConfig();
   return {
     open: interfaceState.open,
-    port: interfaceState.port,
-    baudRate: interfaceState.baudRate,
-    macAddress: interfaceState.macAddress,
-    maxMaster: interfaceState.maxMaster,
-    maxInfoFrames: interfaceState.maxInfoFrames,
-    networkNumber: interfaceState.networkNumber,
+    port: interfaceState.port ?? defaults.port,
+    baudRate: interfaceState.baudRate ?? defaults.baudRate,
+    macAddress: interfaceState.macAddress ?? defaults.macAddress,
+    maxMaster: interfaceState.maxMaster ?? defaults.maxMaster,
+    maxInfoFrames: interfaceState.maxInfoFrames ?? defaults.maxInfoFrames,
+    networkNumber: interfaceState.networkNumber ?? defaults.networkNumber,
+    timeoutMs: interfaceState.timeoutMs ?? defaults.timeoutMs,
+    whoIsRetries: interfaceState.whoIsRetries ?? defaults.whoIsRetries,
+    retryIntervalMs: interfaceState.retryIntervalMs ?? defaults.retryIntervalMs,
+    tokenMode: interfaceState.tokenMode ?? defaults.tokenMode,
+    tokenParticipationImplemented: TOKEN_PARTICIPATION_IMPLEMENTED,
     rxBytes: interfaceState.rxBytes,
     txBytes: interfaceState.txBytes,
     lastActivityAt: interfaceState.lastActivityAt,
@@ -147,6 +222,35 @@ function getStatusSnapshot() {
     discoveryInProgress: Boolean(activeDiscovery),
     lastDiscoverySessionId: lastSession?.discoverySessionId || null,
   };
+}
+
+function mstpStateForFrame(frame) {
+  switch (frame.frameType) {
+    case MSTP_FRAME_TYPE.TOKEN:
+      return 'token';
+    case MSTP_FRAME_TYPE.POLL_FOR_MASTER:
+      return 'poll-for-master';
+    case MSTP_FRAME_TYPE.REPLY_TO_POLL_FOR_MASTER:
+      return 'reply-to-poll-for-master';
+    case MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY:
+    case MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY:
+      return 'data';
+    default:
+      return frame.dataLength === 0 ? 'control' : 'unknown';
+  }
+}
+
+function tokenEventForFrame(frame) {
+  switch (frame.frameType) {
+    case MSTP_FRAME_TYPE.TOKEN:
+      return 'token-pass';
+    case MSTP_FRAME_TYPE.POLL_FOR_MASTER:
+      return 'poll-for-master';
+    case MSTP_FRAME_TYPE.REPLY_TO_POLL_FOR_MASTER:
+      return 'reply-to-poll-for-master';
+    default:
+      return null;
+  }
 }
 
 function recordFrameDiagnostic(frame, discoverySessionId) {
@@ -164,6 +268,8 @@ function recordFrameDiagnostic(frame, discoverySessionId) {
     payloadHex: payload ? payload.slice(0, 32).toString('hex') : '',
     parseResult: frame.parseResult ?? null,
     parseError: frame.parseError ?? null,
+    mstpState: mstpStateForFrame(frame),
+    tokenEvent: tokenEventForFrame(frame),
   };
 
   frameDiagnostics.unshift(entry);
@@ -704,6 +810,10 @@ async function openInterface(input = {}) {
   interfaceState.maxMaster = config.maxMaster;
   interfaceState.maxInfoFrames = config.maxInfoFrames;
   interfaceState.networkNumber = config.networkNumber;
+  interfaceState.timeoutMs = config.timeoutMs;
+  interfaceState.whoIsRetries = config.whoIsRetries;
+  interfaceState.retryIntervalMs = config.retryIntervalMs;
+  interfaceState.tokenMode = config.tokenMode;
   interfaceState.serialPort = port;
   interfaceState.rxBytes = 0;
   interfaceState.txBytes = 0;
@@ -775,14 +885,12 @@ async function discover(input = {}) {
 
   const startedAt = Date.now();
   const config = validateConfig(normalizeConfig(input));
-  const timeoutMs = Math.min(Math.max(Number(input.timeoutMs) || 8000, 1000), 60000);
-  const whoIsRetries = Math.min(Math.max(Number(input.whoIsRetries ?? DEFAULT_WHO_IS_RETRIES) || 1, 1), 10);
-  const retryIntervalMs = Math.min(
-    Math.max(Number(input.retryIntervalMs ?? DEFAULT_RETRY_INTERVAL_MS) || DEFAULT_RETRY_INTERVAL_MS, 250),
-    30000,
-  );
+  const timeoutMs = config.timeoutMs;
+  const whoIsRetries = config.whoIsRetries;
+  const retryIntervalMs = config.retryIntervalMs;
   const wasOpenBefore = interfaceState.open;
   const openedForDiscovery = !wasOpenBefore;
+  const warnings = [];
 
   ensureSerialMonitorNotRunning();
 
@@ -832,6 +940,10 @@ async function discover(input = {}) {
         maxMaster: config.maxMaster,
         maxInfoFrames: config.maxInfoFrames,
         networkNumber: config.networkNumber,
+        timeoutMs: config.timeoutMs,
+        whoIsRetries: config.whoIsRetries,
+        retryIntervalMs: config.retryIntervalMs,
+        tokenMode: config.tokenMode,
       });
     }
 
@@ -935,7 +1047,13 @@ async function discover(input = {}) {
       whoIsData,
     );
 
-    recordSessionLog('warn', 'MS/TP token participation not implemented — frames are sent directly on the bus');
+    if (config.tokenMode && !TOKEN_PARTICIPATION_IMPLEMENTED) {
+      const tokenWarning = 'Token mode requested, but MS/TP token participation is not implemented yet. Falling back to send-only diagnostic discovery.';
+      warnings.push(tokenWarning);
+      recordSessionLog('warn', tokenWarning);
+    } else if (!TOKEN_PARTICIPATION_IMPLEMENTED) {
+      recordSessionLog('warn', 'MS/TP token participation not implemented — frames are sent directly on the bus');
+    }
 
     let sends = 0;
     const sendWhoIs = async () => {
@@ -998,6 +1116,9 @@ async function discover(input = {}) {
       devices,
       logs: sessionLogs,
       frames: [...frameDiagnostics],
+      warnings,
+      tokenMode: config.tokenMode,
+      tokenParticipationImplemented: TOKEN_PARTICIPATION_IMPLEMENTED,
       message: devices.length === 0 ? 'No MS/TP responses received.' : undefined,
       status: getStatusSnapshot(),
     };
@@ -1018,6 +1139,9 @@ async function discover(input = {}) {
       devices: [],
       logs: sessionLogs,
       frames: [...frameDiagnostics],
+      warnings,
+      tokenMode: config.tokenMode,
+      tokenParticipationImplemented: TOKEN_PARTICIPATION_IMPLEMENTED,
       status: getStatusSnapshot(),
     };
   } finally {
@@ -1047,6 +1171,7 @@ async function discover(input = {}) {
 
 module.exports = {
   getDefaultConfig,
+  normalizeConfig,
   getStatus,
   getLogs,
   clearLogs,

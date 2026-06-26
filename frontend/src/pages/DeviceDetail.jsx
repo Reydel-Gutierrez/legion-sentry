@@ -92,15 +92,17 @@ export default function DeviceDetailPage() {
               <>
                 <KvRow label="MS/TP MAC Address" value={device.mstpMacAddress ?? device.macAddress ?? '—'} />
                 <KvRow
-                  label="Network Number"
+                  label="Configured Network Number"
                   value={device.configuredNetworkNumber ?? device.networkNumber ?? '—'}
                 />
                 <KvRow
-                  label="Source Network (raw)"
-                  value={device.sourceNetworkRaw != null
-                    ? `${device.sourceNetworkRaw} (unverified routed source)`
-                    : '—'}
+                  label="Unverified routed source network"
+                  value={device.sourceNetworkRaw != null ? device.sourceNetworkRaw : '—'}
                 />
+                <KvRow label="Discovery Session" value={device.discoverySessionId || '—'} />
+                <KvRow label="First Seen" value={formatLastSeen(device.firstSeenAt)} />
+                <KvRow label="Last Seen" value={formatLastSeen(device.lastSeenAt || device.lastSeen)} />
+                <KvRow label="Sightings" value={device.sightings ?? '—'} />
                 <KvRow label="Vendor ID" value={device.vendorId ?? '—'} />
                 <KvRow label="Max APDU" value={device.maxApdu ?? '—'} />
                 <KvRow
@@ -115,7 +117,9 @@ export default function DeviceDetailPage() {
             <KvRow label="Network" value={device.network} />
             <KvRow label="Protocol" value={device.protocol} />
             {!mstp && <KvRow label="Source" value={device.source || '—'} />}
-            <KvRow label="Last Seen" value={formatLastSeen(device.lastSeen || device.lastSeenAt)} />
+            {!mstp && (
+              <KvRow label="Last Seen" value={formatLastSeen(device.lastSeen || device.lastSeenAt)} />
+            )}
           </PanelCard>
         </Col>
 

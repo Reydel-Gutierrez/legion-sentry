@@ -107,7 +107,8 @@ router.post('/mstp/close', async (req, res, next) => {
 });
 
 router.post('/mstp/discover', async (req, res, next) => {
-  const timeoutMs = Number(req.body?.timeoutMs) || 8000;
+  const normalized = bacnetMstpService.normalizeConfig(req.body || {});
+  const timeoutMs = Number(normalized.timeoutMs) || 20000;
 
   logsService.addLog({
     level: 'info',

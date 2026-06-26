@@ -12,11 +12,150 @@ const BAUD_RATES = [9600, 19200, 38400, 57600, 76800, 115200];
 const DEFAULT_MSTP = {
   port: '/dev/serial0',
   baudRate: 38400,
-  macAddress: 5,
+  macAddress: 3,
   maxMaster: 127,
   maxInfoFrames: 1,
   networkNumber: 2,
+  timeoutMs: 20000,
+  whoIsRetries: 5,
+  retryIntervalMs: 3000,
+  tokenMode: false,
 };
+
+const MSTP_FRAME_TYPE = {
+  TOKEN: 0,
+  POLL_FOR_MASTER: 1,
+  REPLY_TO_POLL_FOR_MASTER: 2,
+};
+
+function validateMstpForm(form, { frames = [], devices = [] } = {}) {
+  const errors = [];
+  const warnings = [];
+
+  const mac = Number(form.macAddress);
+  const maxMaster = Number(form.maxMaster);
+  const maxInfoFrames = Number(form.maxInfoFrames);
+  const networkNumber = Number(form.networkNumber);
+  const timeoutMs = Number(form.timeoutMs);
+  const whoIsRetries = Number(form.whoIsRetries);
+  const retryIntervalMs = Number(form.retryIntervalMs);
+
+  if (!Number.isInteger(mac) || mac < 0 || mac > 127) {
+    errors.push('MAC Address must be an integer between 0 and 127.');
+  }
+  if (!Number.isInteger(maxMaster) || maxMaster < 0 || maxMaster > 127) {
+    errors.push('Max Master must be an integer between 0 and 127.');
+  }
+  if (Number.isInteger(mac) && Number.isInteger(maxMaster) && maxMaster < mac) {
+    errors.push('Max Master must be greater than or equal to MAC Address.');
+  }
+  if (!Number.isInteger(maxInfoFrames) || maxInfoFrames < 1) {
+    errors.push('Max Info Frames must be an integer >= 1.');
+  }
+  if (!Number.isInteger(networkNumber) || networkNumber < 1) {
+    errors.push('Network Number must be an integer >= 1.');
+  }
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1000 || timeoutMs > 120000) {
+    errors.push('Timeout must be between 1000 and 120000 ms.');
+  }
+  if (!Number.isInteger(whoIsRetries) || whoIsRetries < 1 || whoIsRetries > 20) {
+    errors.push('Who-Is retries must be an integer between 1 and 20.');
+  }
+  if (!Number.isFinite(retryIntervalMs) || retryIntervalMs < 250 || retryIntervalMs >= timeoutMs) {
+    errors.push('Retry interval must be between 250 ms and less than timeout.');
+  }
+
+  if (mac === 1 || mac === 7) {
+    warnings.push(`MAC ${mac} may conflict with known field devices (CWTA MAC 1, FEC MAC 7).`);
+  }
+  if (mac === 0) {
+    warnings.push('MAC Address 0 is typically reserved — confirm before proceeding.');
+  }
+
+  if (Number.isInteger(mac)) {
+    const frameConflict = frames.some((f) => f.sourceMac === mac);
+    const deviceConflict = devices.some((d) => {
+      if (!isMstp(d)) return false;
+      const deviceMac = d.mstpMacAddress ?? d.macAddress;
+      return deviceMac === mac;
+    });
+    if (frameConflict || deviceConflict) {
+      warnings.push(`MAC conflict: MAC ${mac} is already active on the bus.`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors, warnings, macZeroConfirm: mac === 0 };
+}
+
+function computeScanSummary(frames) {
+  const sourceMacs = new Set();
+  let headerCrcFailures = 0;
+  let dataCrcFailures = 0;
+  let parseErrors = 0;
+  let tokenFrames = 0;
+  let pollForMasterFrames = 0;
+  let replyToPollForMasterFrames = 0;
+
+  for (const frame of frames) {
+    if (frame.headerCrcValid === false) headerCrcFailures += 1;
+    if (frame.dataCrcValid === false) dataCrcFailures += 1;
+    if (frame.parseError) parseErrors += 1;
+    if (frame.sourceMac != null) sourceMacs.add(frame.sourceMac);
+    if (frame.frameType === MSTP_FRAME_TYPE.TOKEN) tokenFrames += 1;
+    if (frame.frameType === MSTP_FRAME_TYPE.POLL_FOR_MASTER) pollForMasterFrames += 1;
+    if (frame.frameType === MSTP_FRAME_TYPE.REPLY_TO_POLL_FOR_MASTER) {
+      replyToPollForMasterFrames += 1;
+    }
+  }
+
+  return {
+    totalFrames: frames.length,
+    headerCrcFailures,
+    dataCrcFailures,
+    parseErrors,
+    uniqueSourceMacs: sourceMacs.size,
+    tokenFrames,
+    pollForMasterFrames,
+    replyToPollForMasterFrames,
+  };
+}
+
+function computeMacActivity(frames, localMacAddress) {
+  const byMac = new Map();
+
+  for (const frame of frames) {
+    const mac = frame.sourceMac;
+    if (mac == null) continue;
+
+    if (!byMac.has(mac)) {
+      byMac.set(mac, {
+        sourceMac: mac,
+        frameCount: 0,
+        lastSeen: frame.timestamp,
+        frameTypes: new Set(),
+      });
+    }
+
+    const entry = byMac.get(mac);
+    entry.frameCount += 1;
+    if (frame.timestamp && (!entry.lastSeen || frame.timestamp > entry.lastSeen)) {
+      entry.lastSeen = frame.timestamp;
+    }
+    if (frame.frameTypeLabel) {
+      entry.frameTypes.add(frame.frameTypeLabel);
+    }
+  }
+
+  return Array.from(byMac.values())
+    .map((entry) => ({
+      sourceMac: entry.sourceMac,
+      frameCount: entry.frameCount,
+      lastSeen: entry.lastSeen,
+      frameTypesSeen: [...entry.frameTypes].join(', ') || '—',
+      conflict: entry.sourceMac === localMacAddress,
+    }))
+    .sort((a, b) => a.sourceMac - b.sourceMac);
+}
 
 function formatTime(iso) {
   if (!iso) return '—';
@@ -39,6 +178,11 @@ function mstpMac(device) {
   if (!isMstp(device)) return '—';
   const mac = device.mstpMacAddress ?? device.macAddress;
   return mac != null ? mac : '—';
+}
+
+function mstpNetwork(device) {
+  if (!isMstp(device)) return device.networkNumber ?? '—';
+  return device.configuredNetworkNumber ?? device.networkNumber ?? '—';
 }
 
 function crcBadge(valid) {
@@ -81,13 +225,21 @@ export default function BacnetPage() {
       udpPort: status.ip.udpPort,
       networkNumber: status.ip.networkNumber,
     });
+
+    const activeStatus = mstp.status?.open ? mstp.status : null;
+    const savedConfig = status.mstp || {};
+
     setMstpForm({
-      port: mstp.status?.port || status.mstp.serialPort || DEFAULT_MSTP.port,
-      baudRate: mstp.status?.baudRate || status.mstp.baudRate || DEFAULT_MSTP.baudRate,
-      macAddress: mstp.status?.macAddress ?? status.mstp.macAddress ?? DEFAULT_MSTP.macAddress,
-      maxMaster: mstp.status?.maxMaster ?? status.mstp.maxMaster ?? DEFAULT_MSTP.maxMaster,
-      maxInfoFrames: mstp.status?.maxInfoFrames ?? status.mstp.maxInfoFrames ?? DEFAULT_MSTP.maxInfoFrames,
-      networkNumber: mstp.status?.networkNumber ?? status.mstp.networkNumber ?? DEFAULT_MSTP.networkNumber,
+      port: activeStatus?.port || savedConfig.serialPort || DEFAULT_MSTP.port,
+      baudRate: activeStatus?.baudRate ?? savedConfig.baudRate ?? DEFAULT_MSTP.baudRate,
+      macAddress: activeStatus?.macAddress ?? savedConfig.macAddress ?? DEFAULT_MSTP.macAddress,
+      maxMaster: activeStatus?.maxMaster ?? savedConfig.maxMaster ?? DEFAULT_MSTP.maxMaster,
+      maxInfoFrames: activeStatus?.maxInfoFrames ?? savedConfig.maxInfoFrames ?? DEFAULT_MSTP.maxInfoFrames,
+      networkNumber: activeStatus?.networkNumber ?? savedConfig.networkNumber ?? DEFAULT_MSTP.networkNumber,
+      timeoutMs: activeStatus?.timeoutMs ?? savedConfig.timeoutMs ?? DEFAULT_MSTP.timeoutMs,
+      whoIsRetries: activeStatus?.whoIsRetries ?? savedConfig.whoIsRetries ?? DEFAULT_MSTP.whoIsRetries,
+      retryIntervalMs: activeStatus?.retryIntervalMs ?? savedConfig.retryIntervalMs ?? DEFAULT_MSTP.retryIntervalMs,
+      tokenMode: activeStatus?.tokenMode ?? savedConfig.tokenMode ?? DEFAULT_MSTP.tokenMode,
     });
   }, []);
 
@@ -106,6 +258,67 @@ export default function BacnetPage() {
 
   const updateMstp = (field, value) => {
     setMstpForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const runMstpValidation = () => validateMstpForm(mstpForm, { frames, devices });
+
+  const confirmMstpAction = (validation) => {
+    if (!validation.valid) {
+      setMessage({ type: 'error', text: validation.errors.join(' ') });
+      return false;
+    }
+    if (validation.macZeroConfirm) {
+      const confirmed = window.confirm(
+        'MAC Address 0 is typically reserved on MS/TP networks. Continue anyway?',
+      );
+      if (!confirmed) return false;
+    }
+    if (validation.warnings.length > 0) {
+      setMessage({ type: 'info', text: validation.warnings.join(' ') });
+    }
+    return true;
+  };
+
+  const handleSaveMstpConfig = async () => {
+    const validation = runMstpValidation();
+    if (!validation.valid) {
+      setMessage({ type: 'error', text: validation.errors.join(' ') });
+      return;
+    }
+    if (validation.macZeroConfirm) {
+      const confirmed = window.confirm(
+        'MAC Address 0 is typically reserved on MS/TP networks. Save this configuration anyway?',
+      );
+      if (!confirmed) return;
+    }
+
+    setLoading(true);
+    setMessage(null);
+    try {
+      await api.saveBacnetSettings({
+        mstp: {
+          serialPort: mstpForm.port,
+          baudRate: mstpForm.baudRate,
+          macAddress: mstpForm.macAddress,
+          maxMaster: mstpForm.maxMaster,
+          maxInfoFrames: mstpForm.maxInfoFrames,
+          networkNumber: mstpForm.networkNumber,
+          timeoutMs: mstpForm.timeoutMs,
+          whoIsRetries: mstpForm.whoIsRetries,
+          retryIntervalMs: mstpForm.retryIntervalMs,
+          tokenMode: mstpForm.tokenMode,
+        },
+      });
+      await load();
+      const saveWarnings = validation.warnings.length > 0
+        ? ` ${validation.warnings.join(' ')}`
+        : '';
+      setMessage({ type: 'success', text: `MS/TP configuration saved.${saveWarnings}` });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleDiscoverIp = async () => {
@@ -129,6 +342,9 @@ export default function BacnetPage() {
   };
 
   const handleOpenMstp = async () => {
+    const validation = runMstpValidation();
+    if (!confirmMstpAction(validation)) return;
+
     setLoading(true);
     setMessage(null);
     try {
@@ -157,21 +373,27 @@ export default function BacnetPage() {
   };
 
   const handleDiscoverMstp = async () => {
+    const validation = runMstpValidation();
+    if (!confirmMstpAction(validation)) return;
+
     setLoading(true);
-    setMessage(null);
+    if (validation.warnings.length === 0) {
+      setMessage(null);
+    }
     try {
-      const result = await api.discoverBacnetMstp({ ...mstpForm, timeoutMs: 8000 });
+      const result = await api.discoverBacnetMstp({ ...mstpForm });
       await load();
       const found = result.devices?.length ?? 0;
+      const tokenWarning = result.warnings?.length ? ` ${result.warnings.join(' ')}` : '';
       if (result.message && found === 0) {
-        setMessage({ type: 'info', text: result.message });
+        setMessage({ type: 'info', text: `${result.message}${tokenWarning}` });
       } else if (found > 0) {
         setMessage({
           type: 'success',
-          text: `BACnet MS/TP discovery found ${found} device(s) in ${result.durationMs}ms.`,
+          text: `BACnet MS/TP discovery found ${found} device(s) in ${result.durationMs}ms.${tokenWarning}`,
         });
       } else {
-        setMessage({ type: 'info', text: 'No MS/TP responses received.' });
+        setMessage({ type: 'info', text: `No MS/TP responses received.${tokenWarning}` });
       }
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
@@ -216,6 +438,8 @@ export default function BacnetPage() {
 
   const mstp = mstpStatus || {};
   const interfaceOpen = Boolean(mstp.open);
+  const scanSummary = computeScanSummary(frames);
+  const macActivity = computeMacActivity(frames, mstpForm.macAddress);
 
   return (
     <>
@@ -317,6 +541,47 @@ export default function BacnetPage() {
                 disabled={interfaceOpen}
               />
             </Form.Group>
+            <Row>
+              <Col sm={4}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Timeout (ms)</Form.Label>
+                  <Form.Control
+                    type="number"
+                    value={mstpForm.timeoutMs}
+                    onChange={(e) => updateMstp('timeoutMs', Number(e.target.value))}
+                  />
+                </Form.Group>
+              </Col>
+              <Col sm={4}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Who-Is Retries</Form.Label>
+                  <Form.Control
+                    type="number"
+                    value={mstpForm.whoIsRetries}
+                    onChange={(e) => updateMstp('whoIsRetries', Number(e.target.value))}
+                  />
+                </Form.Group>
+              </Col>
+              <Col sm={4}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Retry Interval (ms)</Form.Label>
+                  <Form.Control
+                    type="number"
+                    value={mstpForm.retryIntervalMs}
+                    onChange={(e) => updateMstp('retryIntervalMs', Number(e.target.value))}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+            <Form.Group className="mb-2">
+              <Form.Check
+                type="checkbox"
+                id="mstp-token-mode"
+                label="Token Mode (not implemented — send-only discovery used)"
+                checked={Boolean(mstpForm.tokenMode)}
+                onChange={(e) => updateMstp('tokenMode', e.target.checked)}
+              />
+            </Form.Group>
             <KvRow
               label="Interface Status"
               value={(
@@ -328,9 +593,17 @@ export default function BacnetPage() {
             />
             <KvRow label="RX Bytes" value={mstp.rxBytes ?? 0} />
             <KvRow label="TX Bytes" value={mstp.txBytes ?? 0} />
+            <KvRow label="Token Mode" value={mstp.tokenMode ? 'Enabled' : 'Disabled'} />
+            <KvRow
+              label="Token Participation"
+              value={mstp.tokenParticipationImplemented ? 'Implemented' : 'Not implemented'}
+            />
             <KvRow label="Last Activity" value={formatTime(mstp.lastActivityAt)} />
             <KvRow label="Last Error" value={mstp.lastError || '—'} />
             <div className="action-bar mt-3">
+              <button type="button" className="btn btn-sentry-secondary" onClick={handleSaveMstpConfig} disabled={loading}>
+                Save MS/TP Config
+              </button>
               <button type="button" className="btn btn-sentry-primary" onClick={handleOpenMstp} disabled={loading || interfaceOpen}>
                 Open Interface
               </button>
@@ -389,7 +662,7 @@ export default function BacnetPage() {
                       )}
                     </td>
                     <td>{device.network || device.transport}</td>
-                    <td>{device.networkNumber ?? '—'}</td>
+                    <td>{mstpNetwork(device)}</td>
                     <td className="mono">{mstpMac(device)}</td>
                     <td>{device.deviceInstance}</td>
                     <td>{device.objectName || '—'}</td>
@@ -440,6 +713,58 @@ export default function BacnetPage() {
         )}
       </PanelCard>
 
+      <PanelCard title="MS/TP Scan Summary" className="mt-3">
+        {frames.length === 0 ? (
+          <p style={{ color: '#58677d', margin: 0 }}>No frames captured yet. Run an MS/TP discovery.</p>
+        ) : (
+          <>
+            <KvRow label="Total Frames" value={scanSummary.totalFrames} />
+            <KvRow label="Header CRC Failures" value={scanSummary.headerCrcFailures} />
+            <KvRow label="Data CRC Failures" value={scanSummary.dataCrcFailures} />
+            <KvRow label="Parse Errors" value={scanSummary.parseErrors} />
+            <KvRow label="Unique Source MACs" value={scanSummary.uniqueSourceMacs} />
+            <KvRow label="Token Frames" value={scanSummary.tokenFrames} />
+            <KvRow label="Poll For Master Frames" value={scanSummary.pollForMasterFrames} />
+            <KvRow label="Reply To Poll For Master Frames" value={scanSummary.replyToPollForMasterFrames} />
+          </>
+        )}
+      </PanelCard>
+
+      <PanelCard title="Known MAC Activity" className="mt-3">
+        {macActivity.length === 0 ? (
+          <p style={{ color: '#58677d', margin: 0 }}>No source MAC activity recorded yet.</p>
+        ) : (
+          <Table responsive className="sentry-table mb-0">
+            <thead>
+              <tr>
+                <th>Source MAC</th>
+                <th>Frame Count</th>
+                <th>Last Seen</th>
+                <th>Frame Types Seen</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {macActivity.map((entry) => (
+                <tr key={entry.sourceMac}>
+                  <td className="mono">{entry.sourceMac}</td>
+                  <td>{entry.frameCount}</td>
+                  <td>{formatTime(entry.lastSeen)}</td>
+                  <td>{entry.frameTypesSeen}</td>
+                  <td>
+                    {entry.conflict && (
+                      <span className="status-badge badge-error" title="Matches configured local MAC">
+                        MAC Conflict
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </PanelCard>
+
       <PanelCard title="MS/TP Frame Diagnostics" className="mt-3">
         <p style={{ color: '#58677d', marginTop: 0, marginBottom: '0.75rem' }}>
           Raw decoded frames from the most recent scan (newest first). Use this to
@@ -452,6 +777,7 @@ export default function BacnetPage() {
             <thead>
               <tr>
                 <th>Time</th>
+                <th>Discovery Session</th>
                 <th>Src MAC</th>
                 <th>Dst MAC</th>
                 <th>Frame Type</th>
@@ -459,6 +785,9 @@ export default function BacnetPage() {
                 <th>Hdr CRC</th>
                 <th>Data CRC</th>
                 <th>Parse Result</th>
+                <th>Parse Error</th>
+                <th>MS/TP State</th>
+                <th>Token Event</th>
                 <th>Payload (first 32 bytes)</th>
               </tr>
             </thead>
@@ -466,18 +795,21 @@ export default function BacnetPage() {
               {frames.map((frame, index) => (
                 <tr key={`${frame.timestamp}-${index}`}>
                   <td>{formatTime(frame.timestamp)}</td>
+                  <td className="mono" style={{ fontSize: '0.75em', wordBreak: 'break-all' }}>
+                    {frame.discoverySessionId ? frame.discoverySessionId.slice(0, 8) : '—'}
+                  </td>
                   <td className="mono">{frame.sourceMac ?? '—'}</td>
                   <td className="mono">{frame.destinationMac ?? '—'}</td>
                   <td>{frame.frameTypeLabel || frame.frameType}</td>
                   <td>{frame.length}</td>
                   <td>{crcBadge(frame.headerCrcValid)}</td>
                   <td>{crcBadge(frame.dataCrcValid)}</td>
-                  <td>
-                    {frame.parseResult || '—'}
-                    {frame.parseError && (
-                      <div style={{ color: '#d9534f', fontSize: '0.8em' }}>{frame.parseError}</div>
-                    )}
+                  <td>{frame.parseResult || '—'}</td>
+                  <td style={{ color: frame.parseError ? '#d9534f' : undefined }}>
+                    {frame.parseError || '—'}
                   </td>
+                  <td>{frame.mstpState || '—'}</td>
+                  <td>{frame.tokenEvent || '—'}</td>
                   <td className="mono" style={{ wordBreak: 'break-all', fontSize: '0.8em' }}>
                     {frame.payloadHex || '—'}
                   </td>

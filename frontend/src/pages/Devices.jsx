@@ -24,6 +24,11 @@ function mstpMac(device) {
   return mac != null ? mac : '—';
 }
 
+function mstpNetwork(device) {
+  if (!isMstp(device)) return device.networkNumber ?? '—';
+  return device.configuredNetworkNumber ?? device.networkNumber ?? '—';
+}
+
 export default function DevicesPage() {
   const navigate = useNavigate();
   const [devices, setDevices] = useState([]);
@@ -209,7 +214,7 @@ export default function DevicesPage() {
                       )}
                     </td>
                     <td>{device.network || device.transport}</td>
-                    <td>{device.networkNumber ?? '—'}</td>
+                    <td>{mstpNetwork(device)}</td>
                     <td className="mono">{mstpMac(device)}</td>
                     <td>{device.deviceInstance}</td>
                     <td>{device.objectName || '—'}</td>

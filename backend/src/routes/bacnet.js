@@ -118,23 +118,38 @@ router.post('/mstp/discover', async (req, res, next) => {
 
   try {
     const discovery = await bacnetMstpService.discover(req.body || {});
-    let inventory = null;
 
-    if (discovery.devices?.length > 0) {
-      inventory = await deviceService.ingestBacnetMstpDiscovery(discovery);
-    }
+    // Always ingest, even when zero devices answered, so that missed-scan
+    // tracking runs and the latest-scan marker is updated for every scan.
+    const inventory = await deviceService.ingestBacnetMstpDiscovery(discovery);
+
+    const seenCount = discovery.devices?.length || 0;
+    const mstpTotal = inventory?.inventoryTotals?.mstp ?? 0;
+    const missedDevices = inventory?.missedDevices || [];
 
     logsService.addLog({
       level: 'info',
       service: 'bacnet',
-      message: discovery.devices?.length > 0
-        ? `BACnet MS/TP discovery complete — ${discovery.devices.length} device(s) in ${discovery.durationMs}ms`
-        : `BACnet MS/TP discovery finished — ${discovery.message || 'no devices found'}`,
+      message: `BACnet MS/TP discovery complete — ${seenCount} device(s) seen in this scan, ${mstpTotal} MS/TP inventory total, ${missedDevices.length} not rediscovered.`,
     });
+
+    for (const missed of missedDevices) {
+      logsService.addLog({
+        level: 'warn',
+        service: 'bacnet',
+        message: `Device MAC ${missed.mstpMacAddress} / instance ${missed.deviceInstance} was not rediscovered in this scan; marking stale/missedScans=${missed.missedScans}.`,
+      });
+    }
 
     res.json({
       ...discovery,
       inventory,
+      seenDevices: inventory?.seenDevices || [],
+      missedDevices,
+      inventoryTotals: inventory?.inventoryTotals || null,
+      latestDiscoverySessionId: inventory?.latestDiscoverySessionId
+        || discovery.discoverySessionId
+        || null,
     });
   } catch (err) {
     logsService.addLog({

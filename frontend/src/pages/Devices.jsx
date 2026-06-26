@@ -29,6 +29,25 @@ function mstpNetwork(device) {
   return device.configuredNetworkNumber ?? device.networkNumber ?? '—';
 }
 
+const MSTP_STATUS_META = {
+  seen_latest_scan: { variant: 'running', label: 'Seen latest scan' },
+  recently_seen: { variant: 'warn', label: 'Recently seen' },
+  stale: { variant: 'stopped', label: 'Not rediscovered' },
+  never_confirmed: { variant: 'stopped', label: 'Unknown' },
+};
+
+function mstpStatusBadge(device) {
+  const meta = MSTP_STATUS_META[device.mstpStatus] || MSTP_STATUS_META.never_confirmed;
+  const title = device.mstpStatus === 'stale'
+    ? 'Known inventory device, but it did not answer the latest Who-Is scan.'
+    : undefined;
+  return (
+    <span className={`status-badge badge-${meta.variant}`} title={title}>
+      {meta.label}
+    </span>
+  );
+}
+
 export default function DevicesPage() {
   const navigate = useNavigate();
   const [devices, setDevices] = useState([]);
@@ -190,6 +209,7 @@ export default function DevicesPage() {
               </tr>
             ) : (
               devices.map((device) => {
+                const mstpDevice = isMstp(device);
                 const seenLatest = Boolean(latestSessionId)
                   && device.discoverySessionId === latestSessionId;
                 return (
@@ -202,15 +222,21 @@ export default function DevicesPage() {
                     onKeyDown={(k) => k.key === 'Enter' && navigate(`/devices/${device.id}`)}
                   >
                     <td>
-                      <StatusBadge status={device.status} label={device.status} />
-                      {seenLatest && (
-                        <span
-                          className="status-badge badge-running"
-                          style={{ marginLeft: '0.4rem' }}
-                          title="Responded in the most recent scan"
-                        >
-                          Seen in latest scan
-                        </span>
+                      {mstpDevice ? (
+                        mstpStatusBadge(device)
+                      ) : (
+                        <>
+                          <StatusBadge status={device.status} label={device.status} />
+                          {seenLatest && (
+                            <span
+                              className="status-badge badge-running"
+                              style={{ marginLeft: '0.4rem' }}
+                              title="Responded in the most recent scan"
+                            >
+                              Seen in latest scan
+                            </span>
+                          )}
+                        </>
                       )}
                     </td>
                     <td>{device.network || device.transport}</td>

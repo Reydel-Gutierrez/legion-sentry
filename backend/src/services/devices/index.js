@@ -15,6 +15,36 @@ let lastRefresh = null;
 // not affect persisted inventory and is reset by Clear Latest Scan.
 let latestMstpDiscoverySessionId = null;
 
+// Window within which an MS/TP device that responded in a previous scan is still
+// considered "recently seen / probably online". Beyond this it is "stale".
+const MSTP_RECENT_WINDOW_MS = 2 * 60 * 1000;
+
+function isMstpTransport(device) {
+  return device.transport === 'BACnet MS/TP' || device.transport === 'mstp';
+}
+
+// Conservatively derive an MS/TP device's confirmation status. A persisted
+// inventory device is NEVER assumed online just because it exists — it must
+// have answered the latest scan or been seen within the recent window.
+function computeMstpStatus(device) {
+  const lastSeenAt = device.lastSeenAt || device.lastSeen || null;
+  const seenInLatestScan = Boolean(latestMstpDiscoverySessionId)
+    && device.discoverySessionId != null
+    && device.discoverySessionId === latestMstpDiscoverySessionId;
+
+  if (seenInLatestScan) {
+    return { mstpStatus: 'seen_latest_scan', seenInLatestScan: true };
+  }
+  if (!lastSeenAt) {
+    return { mstpStatus: 'never_confirmed', seenInLatestScan: false };
+  }
+  const age = Date.now() - new Date(lastSeenAt).getTime();
+  if (Number.isFinite(age) && age <= MSTP_RECENT_WINDOW_MS) {
+    return { mstpStatus: 'recently_seen', seenInLatestScan: false };
+  }
+  return { mstpStatus: 'stale', seenInLatestScan: false };
+}
+
 function loadDevices() {
   if (USE_MOCK_DATA) {
     return mockData.MOCK_DEVICES.map((d) => ({
@@ -59,8 +89,8 @@ function buildSummary(devices) {
 }
 
 function normalizeDeviceForApi(device) {
-  const mstp = device.transport === 'mstp' || device.transport === 'BACnet MS/TP';
-  return {
+  const mstp = isMstpTransport(device);
+  const base = {
     ...device,
     vendor: device.vendorName || device.vendor,
     model: device.modelName || device.model,
@@ -72,6 +102,20 @@ function normalizeDeviceForApi(device) {
     lastSeen: device.lastSeenAt || device.lastSeen,
     firmware: device.firmwareRevision || device.firmware || null,
   };
+
+  if (mstp) {
+    const { mstpStatus, seenInLatestScan } = computeMstpStatus(device);
+    base.mstpStatus = mstpStatus;
+    base.seenInLatestScan = seenInLatestScan;
+    base.missedScans = device.missedScans ?? 0;
+    base.sightings = device.sightings ?? null;
+    base.firstSeenAt = device.firstSeenAt ?? null;
+    base.lastSeenAt = device.lastSeenAt ?? device.lastSeen ?? null;
+    base.lastDiscoverySessionId = device.discoverySessionId ?? null;
+    base.latestDiscoverySessionId = latestMstpDiscoverySessionId;
+  }
+
+  return base;
 }
 
 function getDevices() {
@@ -108,6 +152,25 @@ function getDeviceHealth(id) {
       online: device.status === DEVICE_HEALTH.ONLINE,
       responseTimeMs: health.responseTimeMs,
       communicationErrors: health.communicationErrors,
+      lastSeen: device.lastSeenAt || device.lastSeen,
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  if (isMstpTransport(device)) {
+    // MS/TP devices are never assumed online from inventory alone. Online is
+    // only true when the device was confirmed in the latest scan or recently.
+    const { mstpStatus, seenInLatestScan } = computeMstpStatus(device);
+    const online = mstpStatus === 'seen_latest_scan' || mstpStatus === 'recently_seen';
+    return {
+      deviceId: id,
+      status: online ? DEVICE_HEALTH.ONLINE : 'unknown',
+      mstpStatus,
+      seenInLatestScan,
+      online,
+      missedScans: device.missedScans ?? 0,
+      responseTimeMs: device.lastResponseMs ?? null,
+      communicationErrors: 0,
       lastSeen: device.lastSeenAt || device.lastSeen,
       checkedAt: new Date().toISOString(),
     };
@@ -307,17 +370,86 @@ async function ingestBacnetIpDiscovery(result) {
 }
 
 async function ingestBacnetMstpDiscovery(result) {
-  const merged = mergeDiscoveredDevices(result.devices, mapMstpDiscoveredToInventory);
-  latestMstpDiscoverySessionId = result.discoverySessionId || null;
+  const sessionId = result.discoverySessionId || null;
+  const discoveredList = result.devices || [];
+
+  const existing = loadDevices();
+  const byKey = new Map(existing.map((d) => [deviceMergeKey(d), d]));
+  const discoveredKeys = new Set();
+  const seenDevices = [];
+
+  // Devices that answered this scan: refresh timestamps, reset missedScans.
+  for (const discovered of discoveredList) {
+    const mapped = mapMstpDiscoveredToInventory({ ...discovered, discoverySessionId: sessionId });
+    const key = deviceMergeKey(mapped);
+    discoveredKeys.add(key);
+    const prev = byKey.get(key);
+    const next = prev ? {
+      ...prev,
+      ...mapped,
+      id: prev.id,
+      objectName: mapped.objectName || prev.objectName,
+      vendorName: mapped.vendorName || prev.vendorName,
+      modelName: mapped.modelName || prev.modelName,
+      firstSeenAt: prev.firstSeenAt || mapped.firstSeenAt,
+      lastSeenAt: mapped.lastSeenAt,
+      sightings: (prev.sightings || 0) + 1,
+      missedScans: 0,
+      discoverySessionId: sessionId,
+      status: DEVICE_HEALTH.ONLINE,
+    } : {
+      ...mapped,
+      missedScans: 0,
+      sightings: mapped.sightings || 1,
+    };
+    byKey.set(key, next);
+    seenDevices.push(next);
+  }
+
+  // Previously known MS/TP devices NOT seen this scan: increment missedScans.
+  // Inventory is preserved and the device is never auto-deleted or marked
+  // online — its lastSeenAt / discoverySessionId are intentionally untouched.
+  const missedDevices = [];
+  for (const [key, device] of byKey.entries()) {
+    if (discoveredKeys.has(key)) continue;
+    if (!isMstpTransport(device)) continue;
+
+    const previousDiscoverySessionId = device.discoverySessionId || null;
+    const missedScans = (device.missedScans || 0) + 1;
+    const updated = { ...device, missedScans };
+    byKey.set(key, updated);
+
+    missedDevices.push({
+      mstpMacAddress: updated.mstpMacAddress ?? updated.macAddress ?? null,
+      deviceInstance: updated.deviceInstance,
+      lastSeenAt: updated.lastSeenAt || updated.lastSeen || null,
+      missedScans,
+      previousDiscoverySessionId,
+    });
+  }
+
+  const merged = Array.from(byKey.values());
+  persistDevices(merged);
+  hasScanned = true;
+  latestMstpDiscoverySessionId = sessionId;
+
+  const mstpInventory = merged.filter(isMstpTransport);
+
   return {
     success: true,
     protocol: 'bacnet-mstp',
     scannedAt: result.discoveredAt,
     durationMs: result.durationMs,
-    discoverySessionId: result.discoverySessionId || null,
+    discoverySessionId: sessionId,
     latestDiscoverySessionId: latestMstpDiscoverySessionId,
-    devicesFound: result.devices.length,
-    devices: merged.filter((d) => d.transport === 'BACnet MS/TP').map(normalizeDeviceForApi),
+    devicesFound: discoveredList.length,
+    seenDevices: seenDevices.map(normalizeDeviceForApi),
+    missedDevices,
+    inventoryTotals: {
+      mstp: mstpInventory.length,
+      total: merged.length,
+    },
+    devices: mstpInventory.map(normalizeDeviceForApi),
   };
 }
 

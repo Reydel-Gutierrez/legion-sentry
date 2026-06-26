@@ -1,0 +1,12 @@
+{
+  "mstp": {
+    "enabled": true,
+    "serialPort": "/dev/serial0",
+    "macAddress": 5,
+    "baudRate": 38400,
+    "maxMaster": 127,
+    "maxInfoFrames": 1,
+    "networkNumber": 2
+  },
+  "updatedAt": "2026-06-26T22:23:13.822Z"
+}

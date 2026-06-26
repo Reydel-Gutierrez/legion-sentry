@@ -35,6 +35,13 @@ const SEGMENTATION_LABELS = {
   3: 'No Segmentation',
 };
 
+const MSTP_STATUS_LABELS = {
+  seen_latest_scan: 'Seen in latest scan',
+  recently_seen: 'Recently seen',
+  stale: 'Not rediscovered (stale)',
+  never_confirmed: 'Unknown / never confirmed',
+};
+
 export default function DeviceDetailPage() {
   const { id } = useParams();
   const [device, setDevice] = useState(null);
@@ -91,6 +98,11 @@ export default function DeviceDetailPage() {
             {mstp && (
               <>
                 <KvRow label="MS/TP MAC Address" value={device.mstpMacAddress ?? device.macAddress ?? '—'} />
+                <KvRow
+                  label="Rediscovery Status"
+                  value={MSTP_STATUS_LABELS[device.mstpStatus] || MSTP_STATUS_LABELS.never_confirmed}
+                />
+                <KvRow label="Missed Scans" value={device.missedScans ?? 0} />
                 <KvRow
                   label="Configured Network Number"
                   value={device.configuredNetworkNumber ?? device.networkNumber ?? '—'}

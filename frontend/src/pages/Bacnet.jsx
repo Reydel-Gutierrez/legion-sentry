@@ -20,6 +20,11 @@ const DEFAULT_MSTP = {
   whoIsRetries: 5,
   retryIntervalMs: 3000,
   tokenMode: false,
+  directedWhoIsEnabled: false,
+  directedWhoIsMacs: '',
+  extraDiscoveryRetriesEnabled: false,
+  preListenMs: 1000,
+  postSendListenMs: 3000,
 };
 
 const MSTP_FRAME_TYPE = {
@@ -27,6 +32,25 @@ const MSTP_FRAME_TYPE = {
   POLL_FOR_MASTER: 1,
   REPLY_TO_POLL_FOR_MASTER: 2,
 };
+
+const MSTP_STATUS_META = {
+  seen_latest_scan: { variant: 'running', label: 'Seen latest scan' },
+  recently_seen: { variant: 'warn', label: 'Recently seen' },
+  stale: { variant: 'stopped', label: 'Not rediscovered' },
+  never_confirmed: { variant: 'stopped', label: 'Unknown' },
+};
+
+function mstpStatusBadge(device) {
+  const meta = MSTP_STATUS_META[device.mstpStatus] || MSTP_STATUS_META.never_confirmed;
+  const title = device.mstpStatus === 'stale'
+    ? 'Known inventory device, but it did not answer the latest Who-Is scan.'
+    : undefined;
+  return (
+    <span className={`status-badge badge-${meta.variant}`} title={title}>
+      {meta.label}
+    </span>
+  );
+}
 
 function validateMstpForm(form, { frames = [], devices = [] } = {}) {
   const errors = [];
@@ -65,9 +89,6 @@ function validateMstpForm(form, { frames = [], devices = [] } = {}) {
     errors.push('Retry interval must be between 250 ms and less than timeout.');
   }
 
-  if (mac === 1 || mac === 7) {
-    warnings.push(`MAC ${mac} may conflict with known field devices (CWTA MAC 1, FEC MAC 7).`);
-  }
   if (mac === 0) {
     warnings.push('MAC Address 0 is typically reserved — confirm before proceeding.');
   }
@@ -204,6 +225,7 @@ export default function BacnetPage() {
   const [ipForm, setIpForm] = useState(null);
   const [message, setMessage] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [missedDevices, setMissedDevices] = useState([]);
 
   const load = useCallback(async () => {
     const [status, mstp, deviceData, logData, frameData] = await Promise.all([
@@ -240,6 +262,13 @@ export default function BacnetPage() {
       whoIsRetries: activeStatus?.whoIsRetries ?? savedConfig.whoIsRetries ?? DEFAULT_MSTP.whoIsRetries,
       retryIntervalMs: activeStatus?.retryIntervalMs ?? savedConfig.retryIntervalMs ?? DEFAULT_MSTP.retryIntervalMs,
       tokenMode: activeStatus?.tokenMode ?? savedConfig.tokenMode ?? DEFAULT_MSTP.tokenMode,
+      directedWhoIsEnabled: savedConfig.directedWhoIsEnabled ?? DEFAULT_MSTP.directedWhoIsEnabled,
+      directedWhoIsMacs: savedConfig.directedWhoIsMacs ?? DEFAULT_MSTP.directedWhoIsMacs,
+      extraDiscoveryRetriesEnabled: savedConfig.extraDiscoveryRetriesEnabled
+        ?? savedConfig.extraFecRetryEnabled
+        ?? DEFAULT_MSTP.extraDiscoveryRetriesEnabled,
+      preListenMs: savedConfig.preListenMs ?? DEFAULT_MSTP.preListenMs,
+      postSendListenMs: savedConfig.postSendListenMs ?? DEFAULT_MSTP.postSendListenMs,
     });
   }, []);
 
@@ -307,6 +336,11 @@ export default function BacnetPage() {
           whoIsRetries: mstpForm.whoIsRetries,
           retryIntervalMs: mstpForm.retryIntervalMs,
           tokenMode: mstpForm.tokenMode,
+          directedWhoIsEnabled: mstpForm.directedWhoIsEnabled,
+          directedWhoIsMacs: mstpForm.directedWhoIsMacs,
+          extraDiscoveryRetriesEnabled: mstpForm.extraDiscoveryRetriesEnabled,
+          preListenMs: mstpForm.preListenMs,
+          postSendListenMs: mstpForm.postSendListenMs,
         },
       });
       await load();
@@ -383,18 +417,16 @@ export default function BacnetPage() {
     try {
       const result = await api.discoverBacnetMstp({ ...mstpForm });
       await load();
-      const found = result.devices?.length ?? 0;
-      const tokenWarning = result.warnings?.length ? ` ${result.warnings.join(' ')}` : '';
-      if (result.message && found === 0) {
-        setMessage({ type: 'info', text: `${result.message}${tokenWarning}` });
-      } else if (found > 0) {
-        setMessage({
-          type: 'success',
-          text: `BACnet MS/TP discovery found ${found} device(s) in ${result.durationMs}ms.${tokenWarning}`,
-        });
-      } else {
-        setMessage({ type: 'info', text: `No MS/TP responses received.${tokenWarning}` });
-      }
+      const seen = result.devices?.length ?? 0;
+      const missed = result.missedDevices || [];
+      const totalInventory = result.inventoryTotals?.mstp ?? '—';
+      setMissedDevices(missed);
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : '';
+      const summaryText = `BACnet MS/TP discovery complete — ${seen} seen, ${missed.length} not rediscovered, ${totalInventory} total inventory, completed in ${result.durationMs}ms.`;
+      setMessage({
+        type: seen > 0 ? 'success' : 'info',
+        text: `${summaryText}${warningText}`,
+      });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -421,6 +453,7 @@ export default function BacnetPage() {
     try {
       await api.clearBacnetMstpSession();
       await load();
+      setMissedDevices([]);
       setMessage({
         type: 'success',
         text: 'Latest scan results cleared. Device inventory was preserved.',
@@ -582,6 +615,59 @@ export default function BacnetPage() {
                 onChange={(e) => updateMstp('tokenMode', e.target.checked)}
               />
             </Form.Group>
+            <p style={{ color: '#58677d', marginBottom: '0.5rem', marginTop: '0.25rem' }}>Discovery timing</p>
+            <Row>
+              <Col sm={6}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Pre-listen delay (ms)</Form.Label>
+                  <Form.Control
+                    type="number"
+                    value={mstpForm.preListenMs}
+                    onChange={(e) => updateMstp('preListenMs', Number(e.target.value))}
+                  />
+                </Form.Group>
+              </Col>
+              <Col sm={6}>
+                <Form.Group className="mb-2">
+                  <Form.Label>Post-send listen window (ms)</Form.Label>
+                  <Form.Control
+                    type="number"
+                    value={mstpForm.postSendListenMs}
+                    onChange={(e) => updateMstp('postSendListenMs', Number(e.target.value))}
+                  />
+                </Form.Group>
+              </Col>
+            </Row>
+            <Form.Group className="mb-2">
+              <Form.Check
+                type="checkbox"
+                id="mstp-extended-discovery-retries"
+                label="Extended discovery retries"
+                checked={Boolean(mstpForm.extraDiscoveryRetriesEnabled)}
+                onChange={(e) => updateMstp('extraDiscoveryRetriesEnabled', e.target.checked)}
+              />
+              <Form.Text muted>
+                Send additional Who-Is attempts during the scan window for slower or intermittently responding MS/TP devices.
+              </Form.Text>
+            </Form.Group>
+            <Form.Group className="mb-2">
+              <Form.Check
+                type="checkbox"
+                id="mstp-directed-whois"
+                label="Directed Who-Is (not implemented — broadcast discovery only)"
+                checked={Boolean(mstpForm.directedWhoIsEnabled)}
+                onChange={(e) => updateMstp('directedWhoIsEnabled', e.target.checked)}
+              />
+            </Form.Group>
+            <Form.Group className="mb-2">
+              <Form.Label>Directed Who-Is MACs (comma separated)</Form.Label>
+              <Form.Control
+                value={mstpForm.directedWhoIsMacs}
+                placeholder="e.g. 7, 12"
+                onChange={(e) => updateMstp('directedWhoIsMacs', e.target.value)}
+                disabled={!mstpForm.directedWhoIsEnabled}
+              />
+            </Form.Group>
             <KvRow
               label="Interface Status"
               value={(
@@ -639,26 +725,36 @@ export default function BacnetPage() {
                 <th>Object Name</th>
                 <th>Vendor</th>
                 <th>Model</th>
+                <th>First Seen</th>
                 <th>Last Seen</th>
+                <th>Sightings</th>
+                <th>Missed Scans</th>
                 <th />
               </tr>
             </thead>
             <tbody>
               {devices.map((device) => {
+                const mstpDevice = isMstp(device);
                 const seenLatest = Boolean(latestSessionId)
                   && device.discoverySessionId === latestSessionId;
                 return (
                   <tr key={device.id}>
                     <td>
-                      <StatusBadge status={device.status} />
-                      {seenLatest && (
-                        <span
-                          className="status-badge badge-running"
-                          style={{ marginLeft: '0.4rem' }}
-                          title="Responded in the most recent scan"
-                        >
-                          Seen in latest scan
-                        </span>
+                      {mstpDevice ? (
+                        mstpStatusBadge(device)
+                      ) : (
+                        <>
+                          <StatusBadge status={device.status} />
+                          {seenLatest && (
+                            <span
+                              className="status-badge badge-running"
+                              style={{ marginLeft: '0.4rem' }}
+                              title="Responded in the most recent scan"
+                            >
+                              Seen in latest scan
+                            </span>
+                          )}
+                        </>
                       )}
                     </td>
                     <td>{device.network || device.transport}</td>
@@ -668,7 +764,10 @@ export default function BacnetPage() {
                     <td>{device.objectName || '—'}</td>
                     <td>{device.vendor || device.vendorName || '—'}</td>
                     <td>{device.model || device.modelName || '—'}</td>
+                    <td>{mstpDevice ? formatLastSeen(device.firstSeenAt) : '—'}</td>
                     <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
+                    <td>{mstpDevice ? (device.sightings ?? '—') : '—'}</td>
+                    <td>{mstpDevice ? (device.missedScans ?? 0) : '—'}</td>
                     <td>
                       <button
                         type="button"
@@ -685,6 +784,34 @@ export default function BacnetPage() {
           </Table>
         )}
       </PanelCard>
+
+      {missedDevices.length > 0 && (
+        <PanelCard title="Missed Devices" className="mt-3">
+          <p style={{ color: '#58677d', marginTop: 0, marginBottom: '0.75rem' }}>
+            Device is still in inventory but was not seen in latest scan.
+          </p>
+          <Table responsive className="sentry-table mb-0">
+            <thead>
+              <tr>
+                <th>MAC</th>
+                <th>Device Instance</th>
+                <th>Last Seen</th>
+                <th>Missed Scans</th>
+              </tr>
+            </thead>
+            <tbody>
+              {missedDevices.map((missed) => (
+                <tr key={`${missed.mstpMacAddress}-${missed.deviceInstance}`}>
+                  <td className="mono">{missed.mstpMacAddress ?? '—'}</td>
+                  <td>{missed.deviceInstance}</td>
+                  <td>{formatLastSeen(missed.lastSeenAt)}</td>
+                  <td>{missed.missedScans}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </PanelCard>
+      )}
 
       <PanelCard title="Discovery Log" className="mt-3">
         {logs.length === 0 ? (

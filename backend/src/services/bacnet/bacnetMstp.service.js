@@ -31,7 +31,25 @@ const MAX_FRAME_DIAGNOSTICS = 300;
 const DEFAULT_TIMEOUT_MS = 20000;
 const DEFAULT_WHO_IS_RETRIES = 5;
 const DEFAULT_RETRY_INTERVAL_MS = 3000;
+const DEFAULT_PRE_LISTEN_MS = 1000;
+const DEFAULT_POST_SEND_LISTEN_MS = 3000;
 const TOKEN_PARTICIPATION_IMPLEMENTED = false;
+// Directed (unicast) MS/TP Who-Is is not correctly supported yet: it requires
+// genuine token participation to address a specific master. We never fake it.
+const DIRECTED_WHO_IS_IMPLEMENTED = false;
+
+function parseMacList(value) {
+  if (Array.isArray(value)) {
+    return value.map((v) => Number(v)).filter((n) => Number.isInteger(n) && n >= 0 && n <= 127);
+  }
+  if (typeof value === 'string') {
+    return value
+      .split(/[,\s]+/)
+      .map((v) => Number(v.trim()))
+      .filter((n) => Number.isInteger(n) && n >= 0 && n <= 127);
+  }
+  return [];
+}
 
 const interfaceState = {
   open: false,
@@ -87,6 +105,17 @@ function addDiscoveryLog(level, message, extra = {}) {
   logMstp(`[${level}] ${message}`, level === 'error' ? 'error' : 'info');
 }
 
+function readExtendedDiscoveryRetriesEnabled(settings = {}) {
+  if (settings.extraDiscoveryRetriesEnabled != null) {
+    return Boolean(settings.extraDiscoveryRetriesEnabled);
+  }
+  // Legacy alias — migrate internally, do not expose through API responses.
+  if (settings.extraFecRetryEnabled != null) {
+    return Boolean(settings.extraFecRetryEnabled);
+  }
+  return false;
+}
+
 function loadPersistedMstpSettings() {
   const fromSettings = loadSettings().bacnet?.mstp || {};
   try {
@@ -113,6 +142,11 @@ function getDefaultConfig() {
     whoIsRetries: settings.whoIsRetries ?? DEFAULT_WHO_IS_RETRIES,
     retryIntervalMs: settings.retryIntervalMs ?? DEFAULT_RETRY_INTERVAL_MS,
     tokenMode: Boolean(settings.tokenMode),
+    directedWhoIsEnabled: Boolean(settings.directedWhoIsEnabled),
+    directedWhoIsMacs: settings.directedWhoIsMacs ?? '',
+    extraDiscoveryRetriesEnabled: readExtendedDiscoveryRetriesEnabled(settings),
+    preListenMs: settings.preListenMs ?? settings.initialSilenceMs ?? DEFAULT_PRE_LISTEN_MS,
+    postSendListenMs: settings.postSendListenMs ?? DEFAULT_POST_SEND_LISTEN_MS,
   };
 }
 
@@ -129,6 +163,15 @@ function normalizeConfig(input = {}) {
     whoIsRetries: Number(input.whoIsRetries ?? defaults.whoIsRetries),
     retryIntervalMs: Number(input.retryIntervalMs ?? defaults.retryIntervalMs),
     tokenMode: Boolean(input.tokenMode ?? defaults.tokenMode),
+    directedWhoIsEnabled: Boolean(input.directedWhoIsEnabled ?? defaults.directedWhoIsEnabled),
+    directedWhoIsMacs: parseMacList(input.directedWhoIsMacs ?? defaults.directedWhoIsMacs),
+    extraDiscoveryRetriesEnabled: Boolean(
+      input.extraDiscoveryRetriesEnabled
+      ?? input.extraFecRetryEnabled
+      ?? defaults.extraDiscoveryRetriesEnabled,
+    ),
+    preListenMs: Number(input.preListenMs ?? input.initialSilenceMs ?? defaults.preListenMs),
+    postSendListenMs: Number(input.postSendListenMs ?? defaults.postSendListenMs),
   };
 }
 
@@ -886,8 +929,15 @@ async function discover(input = {}) {
   const startedAt = Date.now();
   const config = validateConfig(normalizeConfig(input));
   const timeoutMs = config.timeoutMs;
-  const whoIsRetries = config.whoIsRetries;
+  // Extended discovery retries: send additional broadcast Who-Is attempts during
+  // the scan window for slower or intermittently responding MS/TP devices.
+  const whoIsRetries = config.extraDiscoveryRetriesEnabled
+    ? Math.min(config.whoIsRetries + 3, 20)
+    : config.whoIsRetries;
   const retryIntervalMs = config.retryIntervalMs;
+  // Discovery timing knobs (pre-listen delay, post-send listen window).
+  const preListenMs = Math.min(Math.max(Number(config.preListenMs) || 0, 0), Math.max(timeoutMs - 500, 0));
+  const postSendListenMs = Math.min(Math.max(Number(config.postSendListenMs) || 0, 0), timeoutMs);
   const wasOpenBefore = interfaceState.open;
   const openedForDiscovery = !wasOpenBefore;
   const warnings = [];
@@ -1055,6 +1105,21 @@ async function discover(input = {}) {
       recordSessionLog('warn', 'MS/TP token participation not implemented — frames are sent directly on the bus');
     }
 
+    // Directed (unicast) Who-Is is not implemented — never fake it; warn and
+    // fall back to broadcast discovery.
+    if (config.directedWhoIsEnabled && !DIRECTED_WHO_IS_IMPLEMENTED) {
+      const directedWarning = 'Directed MS/TP Who-Is is not implemented; using broadcast discovery only.';
+      warnings.push(directedWarning);
+      const targetList = config.directedWhoIsMacs?.length
+        ? ` (requested MACs: ${config.directedWhoIsMacs.join(', ')})`
+        : '';
+      recordSessionLog('warn', `${directedWarning}${targetList}`);
+    }
+
+    if (config.extraDiscoveryRetriesEnabled) {
+      recordSessionLog('info', `Extended discovery retry enabled — using ${whoIsRetries} additional Who-Is broadcast attempts`);
+    }
+
     let sends = 0;
     const sendWhoIs = async () => {
       sends += 1;
@@ -1068,6 +1133,12 @@ async function discover(input = {}) {
         whoIsRetries,
       });
     };
+
+    // Optional pre-listen delay: capture bus traffic before transmitting.
+    if (preListenMs > 0) {
+      recordSessionLog('info', `Pre-listen delay ${preListenMs}ms before first Who-Is`);
+      await new Promise((resolve) => setTimeout(resolve, preListenMs));
+    }
 
     // Active retry: send Who-Is up to `whoIsRetries` times, spaced
     // `retryIntervalMs` apart, all within the discovery window.
@@ -1119,6 +1190,12 @@ async function discover(input = {}) {
       warnings,
       tokenMode: config.tokenMode,
       tokenParticipationImplemented: TOKEN_PARTICIPATION_IMPLEMENTED,
+      directedWhoIsEnabled: config.directedWhoIsEnabled,
+      directedWhoIsMacs: config.directedWhoIsMacs,
+      extendedDiscoveryRetriesEnabled: config.extraDiscoveryRetriesEnabled,
+      preListenMs,
+      postSendListenMs,
+      whoIsRetries,
       message: devices.length === 0 ? 'No MS/TP responses received.' : undefined,
       status: getStatusSnapshot(),
     };

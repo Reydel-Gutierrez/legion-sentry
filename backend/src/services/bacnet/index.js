@@ -40,10 +40,26 @@ function loadBacnetConfig() {
   return JSON.parse(raw);
 }
 
+function sanitizeMstpConfig(mstp = {}) {
+  const extraDiscoveryRetriesEnabled = mstp.extraDiscoveryRetriesEnabled != null
+    ? Boolean(mstp.extraDiscoveryRetriesEnabled)
+    : Boolean(mstp.extraFecRetryEnabled);
+  const { extraFecRetryEnabled, ...rest } = mstp;
+  return {
+    ...rest,
+    extraDiscoveryRetriesEnabled,
+  };
+}
+
 function saveMstpSettings(mstpPatch) {
   ensureBacnetFile();
   const current = loadBacnetConfig();
-  current.mstp = { ...current.mstp, ...mstpPatch };
+  const patch = { ...mstpPatch };
+  if (patch.extraFecRetryEnabled != null && patch.extraDiscoveryRetriesEnabled == null) {
+    patch.extraDiscoveryRetriesEnabled = Boolean(patch.extraFecRetryEnabled);
+  }
+  delete patch.extraFecRetryEnabled;
+  current.mstp = sanitizeMstpConfig({ ...current.mstp, ...patch });
   current.updatedAt = new Date().toISOString();
   fs.writeFileSync(BACNET_PATH, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
   return current;
@@ -66,7 +82,7 @@ function getBacnetStatus() {
       boundPort: settings.ip?.enabled ? settings.ip.udpPort : null,
       discoveryImplemented: true,
     },
-    mstp: {
+    mstp: sanitizeMstpConfig({
       ...settings.mstp,
       ...mstpConfig,
       status: settings.mstp?.enabled ? DEVICE_STATES.READY : DEVICE_STATES.DISABLED,
@@ -81,7 +97,7 @@ function getBacnetStatus() {
       discoveryImplemented: true,
       interface: mstpInterface,
       discoveryNote: 'BACnet MS/TP discovery sends real Who-Is frames over RS485. Token participation is not implemented yet.',
-    },
+    }),
     routing: {
       ...(settings.routing || {
         ipNetwork: 1,
@@ -97,14 +113,21 @@ function getBacnetStatus() {
 
 function saveBacnetSettings(payload) {
   const current = loadSettings().bacnet;
+  const mstpPatch = payload.mstp ? { ...payload.mstp } : null;
+  if (mstpPatch?.extraFecRetryEnabled != null && mstpPatch.extraDiscoveryRetriesEnabled == null) {
+    mstpPatch.extraDiscoveryRetriesEnabled = Boolean(mstpPatch.extraFecRetryEnabled);
+  }
+  if (mstpPatch) {
+    delete mstpPatch.extraFecRetryEnabled;
+  }
   const next = {
     ip: { ...current.ip, ...payload.ip },
-    mstp: { ...current.mstp, ...payload.mstp },
+    mstp: sanitizeMstpConfig({ ...current.mstp, ...(mstpPatch || {}) }),
     routing: { ...(current.routing || {}), ...(payload.routing || {}) },
   };
   updateSection('bacnet', next);
-  if (payload.mstp) {
-    saveMstpSettings(payload.mstp);
+  if (mstpPatch) {
+    saveMstpSettings(mstpPatch);
   }
   return getBacnetStatus();
 }

@@ -60,6 +60,8 @@ export const api = {
   discoverBacnetMstp: (data) => request('/bacnet/mstp/discover', { method: 'POST', body: JSON.stringify(data || {}) }),
   getBacnetMstpLogs: () => request('/bacnet/mstp/logs'),
   clearBacnetMstpLogs: () => request('/bacnet/mstp/clear-logs', { method: 'POST' }),
+  getBacnetMstpFrames: () => request('/bacnet/mstp/frames'),
+  clearBacnetMstpSession: () => request('/bacnet/mstp/clear-session', { method: 'POST' }),
   readBacnetDevice: (address, deviceInstance) => request('/bacnet/ip/read-device', {
     method: 'POST',
     body: JSON.stringify({ address, deviceInstance }),

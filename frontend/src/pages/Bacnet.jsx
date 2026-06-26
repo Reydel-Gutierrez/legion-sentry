@@ -31,11 +31,21 @@ function formatLastSeen(iso) {
   return formatTime(iso);
 }
 
-function deviceAddress(device) {
-  if (device.transport === 'BACnet MS/TP' || device.transport === 'mstp') {
-    return device.macAddress != null ? `MAC ${device.macAddress}` : '—';
-  }
-  return device.address || '—';
+function isMstp(device) {
+  return device.transport === 'BACnet MS/TP' || device.transport === 'mstp';
+}
+
+function mstpMac(device) {
+  if (!isMstp(device)) return '—';
+  const mac = device.mstpMacAddress ?? device.macAddress;
+  return mac != null ? mac : '—';
+}
+
+function crcBadge(valid) {
+  if (valid == null) return <span style={{ color: '#58677d' }}>—</span>;
+  return valid
+    ? <span className="status-badge badge-running">OK</span>
+    : <span className="status-badge badge-error">FAIL</span>;
 }
 
 export default function BacnetPage() {
@@ -44,22 +54,27 @@ export default function BacnetPage() {
   const [mstpStatus, setMstpStatus] = useState(null);
   const [devices, setDevices] = useState([]);
   const [logs, setLogs] = useState([]);
+  const [frames, setFrames] = useState([]);
+  const [latestSessionId, setLatestSessionId] = useState(null);
   const [mstpForm, setMstpForm] = useState(DEFAULT_MSTP);
   const [ipForm, setIpForm] = useState(null);
   const [message, setMessage] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
-    const [status, mstp, deviceData, logData] = await Promise.all([
+    const [status, mstp, deviceData, logData, frameData] = await Promise.all([
       api.getBacnetStatus(),
       api.getBacnetMstpStatus(),
       api.getDevices(),
       api.getBacnetMstpLogs(),
+      api.getBacnetMstpFrames(),
     ]);
     setBacnetStatus(status);
     setMstpStatus(mstp.status);
     setDevices(deviceData.devices || []);
+    setLatestSessionId(deviceData.latestDiscoverySessionId || null);
     setLogs(logData.logs || []);
+    setFrames(frameData.frames || []);
     setIpForm({
       enabled: status.ip.enabled,
       deviceInstance: status.ip.deviceInstance,
@@ -81,8 +96,12 @@ export default function BacnetPage() {
   }, [load]);
 
   const refreshLogs = async () => {
-    const logData = await api.getBacnetMstpLogs();
+    const [logData, frameData] = await Promise.all([
+      api.getBacnetMstpLogs(),
+      api.getBacnetMstpFrames(),
+    ]);
     setLogs(logData.logs || []);
+    setFrames(frameData.frames || []);
   };
 
   const updateMstp = (field, value) => {
@@ -167,6 +186,23 @@ export default function BacnetPage() {
       await api.clearBacnetMstpLogs();
       await refreshLogs();
       setMessage({ type: 'success', text: 'Discovery logs cleared.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearSession = async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      await api.clearBacnetMstpSession();
+      await load();
+      setMessage({
+        type: 'success',
+        text: 'Latest scan results cleared. Device inventory was preserved.',
+      });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -304,6 +340,9 @@ export default function BacnetPage() {
               <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverMstp} disabled={loading}>
                 Discover BACnet MS/TP
               </button>
+              <button type="button" className="btn btn-sentry-secondary" onClick={handleClearSession} disabled={loading}>
+                Clear Latest Scan
+              </button>
               <button type="button" className="btn btn-sentry-secondary" onClick={handleClearLogs} disabled={loading}>
                 Clear Logs
               </button>
@@ -321,39 +360,54 @@ export default function BacnetPage() {
               <tr>
                 <th>Status</th>
                 <th>Transport</th>
+                <th>Network</th>
+                <th>MS/TP MAC</th>
                 <th>Device Instance</th>
                 <th>Object Name</th>
                 <th>Vendor</th>
                 <th>Model</th>
-                <th>Address/MAC</th>
-                <th>Network</th>
                 <th>Last Seen</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {devices.map((device) => (
-                <tr key={device.id}>
-                  <td><StatusBadge status={device.status} /></td>
-                  <td>{device.network || device.transport}</td>
-                  <td>{device.deviceInstance}</td>
-                  <td>{device.objectName || '—'}</td>
-                  <td>{device.vendor || device.vendorName || '—'}</td>
-                  <td>{device.model || device.modelName || '—'}</td>
-                  <td>{deviceAddress(device)}</td>
-                  <td>{device.networkNumber ?? '—'}</td>
-                  <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-sentry-secondary btn-sm"
-                      onClick={() => navigate(`/devices/${device.id}`)}
-                    >
-                      Details
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {devices.map((device) => {
+                const seenLatest = Boolean(latestSessionId)
+                  && device.discoverySessionId === latestSessionId;
+                return (
+                  <tr key={device.id}>
+                    <td>
+                      <StatusBadge status={device.status} />
+                      {seenLatest && (
+                        <span
+                          className="status-badge badge-running"
+                          style={{ marginLeft: '0.4rem' }}
+                          title="Responded in the most recent scan"
+                        >
+                          Seen in latest scan
+                        </span>
+                      )}
+                    </td>
+                    <td>{device.network || device.transport}</td>
+                    <td>{device.networkNumber ?? '—'}</td>
+                    <td className="mono">{mstpMac(device)}</td>
+                    <td>{device.deviceInstance}</td>
+                    <td>{device.objectName || '—'}</td>
+                    <td>{device.vendor || device.vendorName || '—'}</td>
+                    <td>{device.model || device.modelName || '—'}</td>
+                    <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-sentry-secondary btn-sm"
+                        onClick={() => navigate(`/devices/${device.id}`)}
+                      >
+                        Details
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </Table>
         )}
@@ -379,6 +433,54 @@ export default function BacnetPage() {
                   <td>{entry.level}</td>
                   <td>{entry.source}</td>
                   <td>{entry.message}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </PanelCard>
+
+      <PanelCard title="MS/TP Frame Diagnostics" className="mt-3">
+        <p style={{ color: '#58677d', marginTop: 0, marginBottom: '0.75rem' }}>
+          Raw decoded frames from the most recent scan (newest first). Use this to
+          understand why a device was or was not parsed.
+        </p>
+        {frames.length === 0 ? (
+          <p style={{ color: '#58677d', margin: 0 }}>No frames captured yet. Run an MS/TP discovery.</p>
+        ) : (
+          <Table responsive className="sentry-table mb-0">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Src MAC</th>
+                <th>Dst MAC</th>
+                <th>Frame Type</th>
+                <th>Len</th>
+                <th>Hdr CRC</th>
+                <th>Data CRC</th>
+                <th>Parse Result</th>
+                <th>Payload (first 32 bytes)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {frames.map((frame, index) => (
+                <tr key={`${frame.timestamp}-${index}`}>
+                  <td>{formatTime(frame.timestamp)}</td>
+                  <td className="mono">{frame.sourceMac ?? '—'}</td>
+                  <td className="mono">{frame.destinationMac ?? '—'}</td>
+                  <td>{frame.frameTypeLabel || frame.frameType}</td>
+                  <td>{frame.length}</td>
+                  <td>{crcBadge(frame.headerCrcValid)}</td>
+                  <td>{crcBadge(frame.dataCrcValid)}</td>
+                  <td>
+                    {frame.parseResult || '—'}
+                    {frame.parseError && (
+                      <div style={{ color: '#d9534f', fontSize: '0.8em' }}>{frame.parseError}</div>
+                    )}
+                  </td>
+                  <td className="mono" style={{ wordBreak: 'break-all', fontSize: '0.8em' }}>
+                    {frame.payloadHex || '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>

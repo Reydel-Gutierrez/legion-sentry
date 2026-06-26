@@ -10,6 +10,11 @@ const BACNET_MSTP_DISCOVERY_IMPLEMENTED = true;
 let hasScanned = false;
 let lastRefresh = null;
 
+// Tracks the discoverySessionId of the most recent MS/TP scan so the UI can
+// show a "seen in latest scan" badge. This is a transient marker only — it does
+// not affect persisted inventory and is reset by Clear Latest Scan.
+let latestMstpDiscoverySessionId = null;
+
 function loadDevices() {
   if (USE_MOCK_DATA) {
     return mockData.MOCK_DEVICES.map((d) => ({
@@ -78,6 +83,7 @@ function getDevices() {
       bacnetIp: BACNET_IP_DISCOVERY_IMPLEMENTED,
       bacnetMstp: BACNET_MSTP_DISCOVERY_IMPLEMENTED || USE_MOCK_DATA,
     },
+    latestDiscoverySessionId: latestMstpDiscoverySessionId,
     lastRefresh,
     mockData: USE_MOCK_DATA,
   };
@@ -160,9 +166,12 @@ function mapDiscoveredToInventory(discovered, source = 'bacnet-ip-discovery') {
 
 function mapMstpDiscoveredToInventory(discovered, source = 'bacnet-mstp-discovery') {
   const now = new Date().toISOString();
-  const macAddress = discovered.macAddress;
+  const mstpMacAddress = discovered.mstpMacAddress ?? discovered.macAddress ?? null;
+  // networkNumber for a local MS/TP device is the configured local network
+  // number, never a value inferred from the BACnet payload.
+  const configuredNetworkNumber = discovered.configuredNetworkNumber ?? discovered.networkNumber ?? null;
   return {
-    id: inventory.generateDeviceId('bacnet-mstp', discovered.deviceInstance, `mac-${macAddress}`),
+    id: inventory.generateDeviceId('bacnet-mstp', discovered.deviceInstance, `mac-${mstpMacAddress}`),
     protocol: 'BACnet',
     transport: 'BACnet MS/TP',
     deviceInstance: discovered.deviceInstance,
@@ -170,11 +179,16 @@ function mapMstpDiscoveredToInventory(discovered, source = 'bacnet-mstp-discover
     vendorName: discovered.vendorName || null,
     modelName: discovered.modelName || null,
     address: null,
-    networkNumber: discovered.networkNumber ?? null,
-    macAddress,
+    networkNumber: configuredNetworkNumber,
+    configuredNetworkNumber,
+    sourceNetworkRaw: discovered.sourceNetworkRaw ?? null,
+    mstpMacAddress,
+    macAddress: mstpMacAddress,
     status: discovered.status || DEVICE_HEALTH.ONLINE,
+    firstSeenAt: discovered.firstSeenAt ?? now,
     lastSeenAt: now,
     lastResponseMs: discovered.lastResponseMs ?? null,
+    discoverySessionId: discovered.discoverySessionId ?? null,
     source,
     vendorId: discovered.vendorId ?? null,
     maxApdu: discovered.maxApdu ?? null,
@@ -184,7 +198,8 @@ function mapMstpDiscoveredToInventory(discovered, source = 'bacnet-mstp-discover
 
 function deviceMergeKey(device) {
   if (device.transport === 'BACnet MS/TP' || device.transport === 'mstp') {
-    return `mstp:${device.macAddress}:${device.deviceInstance}`;
+    const mac = device.mstpMacAddress ?? device.macAddress;
+    return `mstp:${mac}:${device.deviceInstance}`;
   }
   return `${device.address}:${device.deviceInstance}`;
 }
@@ -204,6 +219,8 @@ function mergeDiscoveredDevices(discoveredList, mapper = mapDiscoveredToInventor
       objectName: mapped.objectName || prev.objectName,
       vendorName: mapped.vendorName || prev.vendorName,
       modelName: mapped.modelName || prev.modelName,
+      // Preserve the original first-seen timestamp across rescans.
+      firstSeenAt: prev.firstSeenAt || mapped.firstSeenAt,
       lastSeenAt: mapped.lastSeenAt,
       status: DEVICE_HEALTH.ONLINE,
     } : mapped);
@@ -287,14 +304,24 @@ async function ingestBacnetIpDiscovery(result) {
 
 async function ingestBacnetMstpDiscovery(result) {
   const merged = mergeDiscoveredDevices(result.devices, mapMstpDiscoveredToInventory);
+  latestMstpDiscoverySessionId = result.discoverySessionId || null;
   return {
     success: true,
     protocol: 'bacnet-mstp',
     scannedAt: result.discoveredAt,
     durationMs: result.durationMs,
+    discoverySessionId: result.discoverySessionId || null,
+    latestDiscoverySessionId: latestMstpDiscoverySessionId,
     devicesFound: result.devices.length,
     devices: merged.filter((d) => d.transport === 'BACnet MS/TP').map(normalizeDeviceForApi),
   };
+}
+
+function clearLatestScanSession() {
+  // Forget which devices were seen in the latest scan without removing any
+  // persistent inventory.
+  latestMstpDiscoverySessionId = null;
+  return { success: true, latestDiscoverySessionId: null };
 }
 
 async function refreshDevices() {
@@ -426,6 +453,7 @@ module.exports = {
   refreshDevices,
   deleteDevice,
   clearInventory,
+  clearLatestScanSession,
   getDashboardSummary,
   isDiscoveryImplemented,
   mergeDiscoveredDevices,

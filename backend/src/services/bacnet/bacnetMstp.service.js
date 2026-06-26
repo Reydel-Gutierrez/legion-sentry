@@ -1,4 +1,5 @@
 const os = require('os');
+const crypto = require('crypto');
 const { SerialPort } = require('serialport');
 const { loadSettings } = require('../../lib/settingsStore');
 const serialService = require('../interfaces/serial.service');
@@ -23,6 +24,9 @@ const MSTP_FRAME_TYPE = {
 const MSTP_BROADCAST_MAC = 0xff;
 const MAX_LOG_ENTRIES = 500;
 const MAX_FRAME_DATA_LEN = 501;
+const MAX_FRAME_DIAGNOSTICS = 300;
+const DEFAULT_WHO_IS_RETRIES = 3;
+const DEFAULT_RETRY_INTERVAL_MS = 2500;
 
 const interfaceState = {
   open: false,
@@ -41,6 +45,15 @@ const interfaceState = {
 };
 
 const discoveryLogs = [];
+
+// Per-frame raw diagnostics ring buffer (separate from discovery logs and from
+// persistent inventory). Cleared at the start of each discovery run so it always
+// reflects the most recent scan.
+const frameDiagnostics = [];
+
+// Temporary discovery result buffer for the most recent run. This is NOT the
+// persistent inventory — it only describes what was seen in the latest session.
+let lastSession = null;
 
 let processCleanupRegistered = false;
 let activeDiscovery = null;
@@ -132,7 +145,55 @@ function getStatusSnapshot() {
     lastError: interfaceState.lastError,
     openedAt: interfaceState.openedAt,
     discoveryInProgress: Boolean(activeDiscovery),
+    lastDiscoverySessionId: lastSession?.discoverySessionId || null,
   };
+}
+
+function recordFrameDiagnostic(frame, discoverySessionId) {
+  const payload = frame.data && frame.data.length ? frame.data : null;
+  const entry = {
+    discoverySessionId: discoverySessionId || null,
+    timestamp: new Date().toISOString(),
+    sourceMac: frame.source ?? null,
+    destinationMac: frame.destination ?? null,
+    frameType: frame.frameType ?? null,
+    frameTypeLabel: frame.frameTypeLabel ?? null,
+    length: frame.dataLength ?? 0,
+    headerCrcValid: frame.headerCrcValid ?? null,
+    dataCrcValid: frame.dataCrcValid ?? null,
+    payloadHex: payload ? payload.slice(0, 32).toString('hex') : '',
+    parseResult: frame.parseResult ?? null,
+    parseError: frame.parseError ?? null,
+  };
+
+  frameDiagnostics.unshift(entry);
+  if (frameDiagnostics.length > MAX_FRAME_DIAGNOSTICS) {
+    frameDiagnostics.length = MAX_FRAME_DIAGNOSTICS;
+  }
+  return entry;
+}
+
+function getFrames() {
+  return {
+    success: true,
+    discoverySessionId: lastSession?.discoverySessionId || null,
+    frames: [...frameDiagnostics],
+  };
+}
+
+function getSession() {
+  return {
+    success: true,
+    session: lastSession ? { ...lastSession, devices: [...lastSession.devices] } : null,
+  };
+}
+
+function clearSession() {
+  const cleared = lastSession?.discoverySessionId || null;
+  lastSession = null;
+  frameDiagnostics.length = 0;
+  addDiscoveryLog('info', 'Latest MS/TP discovery session results cleared (inventory untouched)');
+  return { success: true, clearedSessionId: cleared };
 }
 
 function getStatus() {
@@ -291,27 +352,34 @@ function frameTypeLabel(frameType) {
 
 function findNpduApdu(data) {
   if (!data || data.length < 2) {
-    return { npduOffset: null, apduOffset: null, npduControl: null };
+    return { npduOffset: null, apduOffset: null, npduControl: null, sourceNet: null };
   }
 
   let offset = 0;
   const version = data[offset];
   if (version !== 0x01) {
-    return { npduOffset: 0, apduOffset: null, npduControl: null, version };
+    return {
+      npduOffset: 0, apduOffset: null, npduControl: null, version, sourceNet: null,
+    };
   }
 
   offset += 1;
   const control = data[offset];
   offset += 1;
+  let sourceNet = null;
 
   if (control & 0x20) {
     if (offset + 2 > data.length) {
-      return { npduOffset: 0, apduOffset: null, npduControl: control, version };
+      return {
+        npduOffset: 0, apduOffset: null, npduControl: control, version, sourceNet,
+      };
     }
     const dnet = (data[offset] << 8) | data[offset + 1];
     offset += 2;
     if (offset >= data.length) {
-      return { npduOffset: 0, apduOffset: null, npduControl: control, version };
+      return {
+        npduOffset: 0, apduOffset: null, npduControl: control, version, sourceNet,
+      };
     }
     const dadrLen = data[offset];
     offset += 1 + dadrLen;
@@ -322,11 +390,18 @@ function findNpduApdu(data) {
 
   if (control & 0x08) {
     if (offset + 2 > data.length) {
-      return { npduOffset: 0, apduOffset: null, npduControl: control, version };
+      return {
+        npduOffset: 0, apduOffset: null, npduControl: control, version, sourceNet,
+      };
     }
+    // Source network specifier present — this indicates a routed NPDU. We capture
+    // the raw value but do NOT treat it as the device's local network number.
+    sourceNet = (data[offset] << 8) | data[offset + 1];
     offset += 2;
     if (offset >= data.length) {
-      return { npduOffset: 0, apduOffset: null, npduControl: control, version };
+      return {
+        npduOffset: 0, apduOffset: null, npduControl: control, version, sourceNet,
+      };
     }
     const sadrLen = data[offset];
     offset += 1 + sadrLen;
@@ -341,31 +416,34 @@ function findNpduApdu(data) {
     apduOffset: offset < data.length ? offset : null,
     npduControl: control,
     version,
+    sourceNet,
   };
 }
 
-function decodeUnsignedTag(data, offset) {
-  const tag = data[offset];
-  const tagNumber = (tag >> 4) & 0x0f;
-  const length = tag & 0x0f;
-  const valueBytes = data.slice(offset + 1, offset + 1 + length);
+function readUnsigned(data, offset, length) {
   let value = 0;
-  for (const byte of valueBytes) {
-    value = (value << 8) | byte;
+  for (let i = 0; i < length; i += 1) {
+    value = (value * 256) + data[offset + i];
   }
-  return { tagNumber, length, value, nextOffset: offset + 1 + length };
+  return value;
 }
 
 function parseObjectIdentifier(data, offset) {
-  const encoded = (data[offset] << 24)
-    | (data[offset + 1] << 16)
-    | (data[offset + 2] << 8)
-    | data[offset + 3];
-  const objectType = (encoded >> 22) & 0x3ff;
-  const instance = encoded & 0x3fffff;
+  // Use unsigned arithmetic to avoid 32-bit signed shift overflow.
+  const encoded = (data[offset] * 0x1000000)
+    + (data[offset + 1] * 0x10000)
+    + (data[offset + 2] * 0x100)
+    + data[offset + 3];
+  const objectType = Math.floor(encoded / 0x400000);
+  const instance = encoded % 0x400000;
   return { objectType, instance };
 }
 
+// Decode an application-tagged I-Am APDU. I-Am content is, in order:
+//   1. BACnetObjectIdentifier (tag 12, 4 bytes)
+//   2. Max APDU length accepted (Unsigned, tag 2)
+//   3. Segmentation supported (Enumerated, tag 9)
+//   4. Vendor ID (Unsigned, tag 2)
 function parseIAmApdu(data, apduOffset) {
   if (apduOffset == null || data.length < apduOffset + 2) {
     return null;
@@ -383,36 +461,49 @@ function parseIAmApdu(data, apduOffset) {
   let maxApdu = null;
   let segmentation = null;
   let vendorId = null;
+  let unsignedSeen = 0;
 
   while (offset < data.length) {
     const tagByte = data[offset];
-    const tagClass = (tagByte >> 4) & 0x07;
+    const isContext = (tagByte & 0x08) !== 0;
     const tagNumber = (tagByte >> 4) & 0x0f;
-    const length = tagByte & 0x0f;
+    let length = tagByte & 0x07;
+    let headerLen = 1;
 
-    if (length === 0x0f || tagClass === 0x07) {
+    // Extended length form: low 3 bits == 5, real length in following byte.
+    if (length === 5) {
+      length = data[offset + 1];
+      headerLen = 2;
+    }
+
+    // I-Am uses application tags only; a context tag means malformed/unexpected.
+    if (isContext) {
       break;
     }
 
-    if (tagNumber === 0x0c && length === 4) {
-      const objectId = parseObjectIdentifier(data, offset + 1);
+    const valueOffset = offset + headerLen;
+    if (valueOffset + length > data.length) {
+      break;
+    }
+
+    if (tagNumber === 12 && length === 4) {
+      const objectId = parseObjectIdentifier(data, valueOffset);
       if (objectId.objectType === 8) {
         deviceInstance = objectId.instance;
       }
-    } else if (tagNumber === 0x02 || tagNumber === 0x01) {
-      const decoded = decodeUnsignedTag(data, offset);
-      if (maxApdu == null) {
-        maxApdu = decoded.value;
-      } else if (vendorId == null) {
-        vendorId = decoded.value;
+    } else if (tagNumber === 2) {
+      const value = readUnsigned(data, valueOffset, length);
+      if (unsignedSeen === 0) {
+        maxApdu = value;
+      } else if (unsignedSeen === 1) {
+        vendorId = value;
       }
-      offset = decoded.nextOffset;
-      continue;
-    } else if (tagNumber === 0x09 && length === 1) {
-      segmentation = data[offset + 1];
+      unsignedSeen += 1;
+    } else if (tagNumber === 9) {
+      segmentation = readUnsigned(data, valueOffset, length);
     }
 
-    offset += 1 + length;
+    offset = valueOffset + length;
   }
 
   if (deviceInstance == null) {
@@ -451,41 +542,80 @@ function parseMstpFrames(buffer) {
     const lenLsb = buffer[index + 6];
     const headerCrc = buffer[index + 7];
     const dataLength = (lenMsb << 8) | lenLsb;
-    const frameEnd = index + 8 + dataLength + (dataLength > 0 ? 2 : 0);
 
-    if (frameEnd > buffer.length) {
-      break;
-    }
+    const headerCrcValid = verifyHeaderCrc(frameType, destination, source, lenMsb, lenLsb, headerCrc);
 
-    if (!verifyHeaderCrc(frameType, destination, source, lenMsb, lenLsb, headerCrc)) {
-      addDiscoveryLog('warn', 'MS/TP header CRC mismatch — skipping frame', {
-        sourceMac: source,
+    if (!headerCrcValid) {
+      // Header CRC failed — the length bytes cannot be trusted. Record a
+      // diagnostic frame and resynchronise on the next preamble.
+      frames.push({
         frameType,
+        frameTypeLabel: frameTypeLabel(frameType),
+        destination,
+        source,
+        dataLength,
+        headerCrcValid: false,
+        dataCrcValid: null,
+        data: Buffer.alloc(0),
+        npdu: null,
+        iAm: null,
+        parseResult: 'header-crc-invalid',
+        parseError: 'MS/TP header CRC mismatch',
+        rawLength: 8,
       });
       index += 2;
       continue;
     }
 
+    const frameEnd = index + 8 + dataLength + (dataLength > 0 ? 2 : 0);
+    if (frameEnd > buffer.length) {
+      // Incomplete frame — wait for the rest of the bytes.
+      break;
+    }
+
     let data = Buffer.alloc(0);
-    let dataValid = true;
+    let dataCrcValid = true;
 
     if (dataLength > 0) {
       data = buffer.slice(index + 8, index + 8 + dataLength);
       const crcLsb = buffer[index + 8 + dataLength];
       const crcMsb = buffer[index + 8 + dataLength + 1];
-      dataValid = verifyDataCrc(data, crcLsb, crcMsb);
-      if (!dataValid) {
-        addDiscoveryLog('warn', 'MS/TP data CRC mismatch — skipping frame', {
-          sourceMac: source,
-          frameType,
-        });
-      }
+      dataCrcValid = verifyDataCrc(data, crcLsb, crcMsb);
     }
 
-    const npduInfo = dataValid && dataLength > 0 ? findNpduApdu(data) : null;
-    const iAm = dataValid && npduInfo?.apduOffset != null
-      ? parseIAmApdu(data, npduInfo.apduOffset)
-      : null;
+    let npduInfo = null;
+    let iAm = null;
+    let parseResult = null;
+    let parseError = null;
+
+    if (dataLength === 0) {
+      parseResult = 'control-frame';
+    } else if (!dataCrcValid) {
+      parseResult = 'data-crc-invalid';
+      parseError = 'MS/TP data CRC mismatch';
+    } else {
+      try {
+        npduInfo = findNpduApdu(data);
+        if (npduInfo?.apduOffset == null) {
+          parseResult = 'no-apdu';
+        } else {
+          iAm = parseIAmApdu(data, npduInfo.apduOffset);
+          if (iAm) {
+            parseResult = 'i-am';
+          } else if (
+            frameType === MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY
+            || frameType === MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY
+          ) {
+            parseResult = 'bacnet-apdu';
+          } else {
+            parseResult = 'parsed';
+          }
+        }
+      } catch (err) {
+        parseResult = 'parse-error';
+        parseError = err.message;
+      }
+    }
 
     frames.push({
       frameType,
@@ -493,10 +623,15 @@ function parseMstpFrames(buffer) {
       destination,
       source,
       dataLength,
-      dataValid,
-      data: dataValid ? data : Buffer.alloc(0),
+      headerCrcValid: true,
+      dataCrcValid: dataLength > 0 ? dataCrcValid : null,
+      // Keep the raw payload available for diagnostics even when the data CRC
+      // failed. Device parsing is gated separately on a valid `iAm`.
+      data,
       npdu: npduInfo,
       iAm,
+      parseResult,
+      parseError,
       rawLength: frameEnd - index,
     });
 
@@ -641,29 +776,52 @@ async function discover(input = {}) {
   const startedAt = Date.now();
   const config = validateConfig(normalizeConfig(input));
   const timeoutMs = Math.min(Math.max(Number(input.timeoutMs) || 8000, 1000), 60000);
+  const whoIsRetries = Math.min(Math.max(Number(input.whoIsRetries ?? DEFAULT_WHO_IS_RETRIES) || 1, 1), 10);
+  const retryIntervalMs = Math.min(
+    Math.max(Number(input.retryIntervalMs ?? DEFAULT_RETRY_INTERVAL_MS) || DEFAULT_RETRY_INTERVAL_MS, 250),
+    30000,
+  );
   const wasOpenBefore = interfaceState.open;
   const openedForDiscovery = !wasOpenBefore;
 
   ensureSerialMonitorNotRunning();
+
+  // Each discovery run gets a unique session id. Every log line, discovered
+  // device, and frame diagnostic is tagged with it.
+  const discoverySessionId = crypto.randomUUID();
+
+  // Clear only the temporary discovery result buffers — never the persistent
+  // inventory. The session buffer and frame diagnostics start fresh each run.
+  frameDiagnostics.length = 0;
+  lastSession = {
+    discoverySessionId,
+    startedAt: new Date(startedAt).toISOString(),
+    finishedAt: null,
+    durationMs: null,
+    configuredNetworkNumber: config.networkNumber,
+    devices: [],
+  };
 
   const seen = new Map();
   const sessionLogs = [];
   let rxBuffer = Buffer.alloc(0);
   let dataListener = null;
   let discoveryTimer = null;
+  let retryTimer = null;
 
   const recordSessionLog = (level, message, extra = {}) => {
+    const enriched = { discoverySessionId, ...extra };
     sessionLogs.push({
       time: new Date().toISOString(),
       level,
       source: 'bacnet-mstp',
       message,
-      ...extra,
+      ...enriched,
     });
-    addDiscoveryLog(level, message, extra);
+    addDiscoveryLog(level, message, enriched);
   };
 
-  activeDiscovery = { startedAt, config, timeoutMs };
+  activeDiscovery = { startedAt, config, timeoutMs, discoverySessionId };
 
   try {
     if (!interfaceState.open) {
@@ -692,21 +850,45 @@ async function discover(input = {}) {
         rxBuffer = remaining;
 
         for (const frame of frames) {
-          if (frame.iAm) {
-            const key = `${frame.source}:${frame.iAm.deviceInstance}`;
-            if (seen.has(key)) continue;
+          // Record a raw diagnostic for every received frame, regardless of
+          // whether it parsed into a device.
+          recordFrameDiagnostic(frame, discoverySessionId);
 
+          if (frame.iAm) {
+            // Deduplicate by deviceInstance + MS/TP MAC. Update lastSeenAt for
+            // devices already seen this session rather than creating duplicates.
+            const key = `${frame.source}:${frame.iAm.deviceInstance}`;
+            const existing = seen.get(key);
+            if (existing) {
+              existing.lastSeenAt = new Date().toISOString();
+              existing.sightings += 1;
+              continue;
+            }
+
+            const sourceNetworkRaw = frame.npdu?.sourceNet ?? null;
+            const nowIso = new Date().toISOString();
             const device = {
               protocol: 'BACnet',
               transport: 'BACnet MS/TP',
               deviceInstance: frame.iAm.deviceInstance,
+              // Distinct MS/TP MAC field — never reuse the generic "address".
+              mstpMacAddress: frame.source,
               macAddress: frame.source,
+              // networkNumber for a locally discovered device is the configured
+              // local MS/TP network number, NOT a value inferred from the payload.
+              configuredNetworkNumber: config.networkNumber,
               networkNumber: config.networkNumber,
+              // Raw routed source network, if the NPDU carried one. Stored
+              // separately and never promoted to networkNumber until verified.
+              sourceNetworkRaw,
               vendorId: frame.iAm.vendorId ?? null,
               maxApdu: frame.iAm.maxApdu ?? null,
               segmentation: frame.iAm.segmentation ?? null,
               status: 'online',
-              lastSeenAt: new Date().toISOString(),
+              firstSeenAt: nowIso,
+              lastSeenAt: nowIso,
+              sightings: 1,
+              discoverySessionId,
               source: 'bacnet-mstp-discovery',
               frameType: frame.frameType,
               frameTypeLabel: frame.frameTypeLabel,
@@ -714,20 +896,26 @@ async function discover(input = {}) {
 
             seen.set(key, device);
             recordSessionLog('info', `I-Am received from MAC ${frame.source}, device instance ${frame.iAm.deviceInstance}`, {
-              macAddress: frame.source,
+              mstpMacAddress: frame.source,
               deviceInstance: frame.iAm.deviceInstance,
+              configuredNetworkNumber: config.networkNumber,
+              sourceNetworkRaw,
             });
-            recordSessionLog('info', `Device discovered — instance ${frame.iAm.deviceInstance} at MAC ${frame.source}`, {
-              macAddress: frame.source,
-              deviceInstance: frame.iAm.deviceInstance,
-            });
+            if (sourceNetworkRaw != null) {
+              recordSessionLog('warn', `Routed source network ${sourceNetworkRaw} detected on I-Am from MAC ${frame.source} — stored as sourceNetworkRaw only (not verified)`, {
+                mstpMacAddress: frame.source,
+                deviceInstance: frame.iAm.deviceInstance,
+                sourceNetworkRaw,
+              });
+            }
           } else if (
-            frame.dataValid
+            frame.headerCrcValid
+            && frame.dataCrcValid
             && (frame.frameType === MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY
               || frame.frameType === MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY)
           ) {
             recordSessionLog('debug', `BACnet MS/TP data frame from MAC ${frame.source} (${frame.frameTypeLabel})`, {
-              sourceMac: frame.source,
+              mstpMacAddress: frame.source,
               frameType: frame.frameType,
             });
           }
@@ -747,22 +935,53 @@ async function discover(input = {}) {
       whoIsData,
     );
 
-    recordSessionLog('info', `Sending BACnet Who-Is broadcast (${whoIsFrame.length} bytes)`, {
-      macAddress: config.macAddress,
-      frameBytes: whoIsFrame.length,
-    });
-    recordSessionLog('warn', 'MS/TP token participation not implemented — frame sent directly on bus');
+    recordSessionLog('warn', 'MS/TP token participation not implemented — frames are sent directly on the bus');
 
-    await writeToPort(port, whoIsFrame);
-    interfaceState.txBytes += whoIsFrame.length;
-    interfaceState.lastActivityAt = new Date().toISOString();
+    let sends = 0;
+    const sendWhoIs = async () => {
+      sends += 1;
+      await writeToPort(port, whoIsFrame);
+      interfaceState.txBytes += whoIsFrame.length;
+      interfaceState.lastActivityAt = new Date().toISOString();
+      recordSessionLog('info', `Who-Is broadcast ${sends}/${whoIsRetries} sent (${whoIsFrame.length} bytes)`, {
+        macAddress: config.macAddress,
+        frameBytes: whoIsFrame.length,
+        attempt: sends,
+        whoIsRetries,
+      });
+    };
+
+    // Active retry: send Who-Is up to `whoIsRetries` times, spaced
+    // `retryIntervalMs` apart, all within the discovery window.
+    await sendWhoIs();
+    if (whoIsRetries > 1) {
+      retryTimer = setInterval(() => {
+        if (sends >= whoIsRetries) {
+          clearInterval(retryTimer);
+          retryTimer = null;
+          return;
+        }
+        sendWhoIs().catch((err) => {
+          recordSessionLog('warn', `Who-Is retry failed: ${err.message}`);
+        });
+      }, retryIntervalMs);
+    }
 
     await new Promise((resolve) => {
       discoveryTimer = setTimeout(resolve, timeoutMs);
     });
 
+    if (retryTimer) {
+      clearInterval(retryTimer);
+      retryTimer = null;
+    }
+
     const devices = Array.from(seen.values());
     const durationMs = Date.now() - startedAt;
+
+    lastSession.finishedAt = new Date().toISOString();
+    lastSession.durationMs = durationMs;
+    lastSession.devices = devices;
 
     if (devices.length === 0) {
       recordSessionLog('info', 'Discovery timeout — no MS/TP I-Am responses received');
@@ -773,29 +992,40 @@ async function discover(input = {}) {
     return {
       success: true,
       implemented: true,
+      discoverySessionId,
       discoveredAt: new Date().toISOString(),
       durationMs,
       devices,
       logs: sessionLogs,
+      frames: [...frameDiagnostics],
       message: devices.length === 0 ? 'No MS/TP responses received.' : undefined,
       status: getStatusSnapshot(),
     };
   } catch (err) {
     interfaceState.lastError = err.message;
     recordSessionLog('error', `Discovery failed: ${err.message}`);
+    if (lastSession) {
+      lastSession.finishedAt = new Date().toISOString();
+      lastSession.durationMs = Date.now() - startedAt;
+    }
     return {
       success: false,
       implemented: true,
+      discoverySessionId,
       message: err.message,
       discoveredAt: new Date().toISOString(),
       durationMs: Date.now() - startedAt,
       devices: [],
       logs: sessionLogs,
+      frames: [...frameDiagnostics],
       status: getStatusSnapshot(),
     };
   } finally {
     if (discoveryTimer) {
       clearTimeout(discoveryTimer);
+    }
+    if (retryTimer) {
+      clearInterval(retryTimer);
     }
 
     const port = interfaceState.serialPort;
@@ -820,6 +1050,9 @@ module.exports = {
   getStatus,
   getLogs,
   clearLogs,
+  getFrames,
+  getSession,
+  clearSession,
   openInterface,
   closeInterface,
   discover,

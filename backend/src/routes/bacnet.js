@@ -153,4 +153,22 @@ router.post('/mstp/clear-logs', (_req, res) => {
   res.json(bacnetMstpService.clearLogs());
 });
 
+router.get('/mstp/frames', (_req, res) => {
+  res.json(bacnetMstpService.getFrames());
+});
+
+router.post('/mstp/clear-session', (_req, res) => {
+  // Clears the latest discovery session results (temporary buffer + frame
+  // diagnostics) and removes the "seen in latest scan" marker. Persistent
+  // device inventory is intentionally left untouched.
+  const session = bacnetMstpService.clearSession();
+  const inventory = deviceService.clearLatestScanSession();
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: 'BACnet MS/TP latest scan session cleared (inventory preserved)',
+  });
+  res.json({ success: true, session, inventory });
+});
+
 module.exports = router;

@@ -90,8 +90,17 @@ export default function DeviceDetailPage() {
             )}
             {mstp && (
               <>
-                <KvRow label="MAC Address" value={device.macAddress ?? '—'} />
-                <KvRow label="Network Number" value={device.networkNumber ?? '—'} />
+                <KvRow label="MS/TP MAC Address" value={device.mstpMacAddress ?? device.macAddress ?? '—'} />
+                <KvRow
+                  label="Network Number"
+                  value={device.configuredNetworkNumber ?? device.networkNumber ?? '—'}
+                />
+                <KvRow
+                  label="Source Network (raw)"
+                  value={device.sourceNetworkRaw != null
+                    ? `${device.sourceNetworkRaw} (unverified routed source)`
+                    : '—'}
+                />
                 <KvRow label="Vendor ID" value={device.vendorId ?? '—'} />
                 <KvRow label="Max APDU" value={device.maxApdu ?? '—'} />
                 <KvRow

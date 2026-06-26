@@ -14,15 +14,29 @@ function formatLastSeen(iso) {
   return new Date(iso).toLocaleString();
 }
 
+function isMstp(device) {
+  return device.transport === 'BACnet MS/TP' || device.transport === 'mstp';
+}
+
+function mstpMac(device) {
+  if (!isMstp(device)) return '—';
+  const mac = device.mstpMacAddress ?? device.macAddress;
+  return mac != null ? mac : '—';
+}
+
 export default function DevicesPage() {
   const navigate = useNavigate();
   const [devices, setDevices] = useState([]);
+  const [latestSessionId, setLatestSessionId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState(null);
 
   const load = () => {
     api.getDevices()
-      .then((data) => setDevices(data.devices))
+      .then((data) => {
+        setDevices(data.devices);
+        setLatestSessionId(data.latestDiscoverySessionId || null);
+      })
       .catch((err) => setMessage({ type: 'error', text: err.message }));
   };
 
@@ -124,6 +138,20 @@ export default function DevicesPage() {
     }
   };
 
+  const handleClearSession = async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      await api.clearBacnetMstpSession();
+      load();
+      setMessage({ type: 'success', text: 'Latest scan results cleared. Device inventory was preserved.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <>
       {message && (
@@ -137,12 +165,13 @@ export default function DevicesPage() {
           <thead>
             <tr>
               <th>Status</th>
+              <th>Transport</th>
+              <th>Network</th>
+              <th>MS/TP MAC</th>
               <th>Device Instance</th>
               <th>Object Name</th>
               <th>Vendor</th>
               <th>Model</th>
-              <th>Address</th>
-              <th>Network</th>
               <th>Last Seen</th>
               <th />
             </tr>
@@ -150,44 +179,56 @@ export default function DevicesPage() {
           <tbody>
             {devices.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', color: '#58677d' }}>
+                <td colSpan={10} style={{ textAlign: 'center', color: '#58677d' }}>
                   No devices in inventory.
                 </td>
               </tr>
             ) : (
-              devices.map((device) => (
-                <tr
-                  key={device.id}
-                  className="device-row-clickable"
-                  onClick={() => navigate(`/devices/${device.id}`)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(k) => k.key === 'Enter' && navigate(`/devices/${device.id}`)}
-                >
-                  <td><StatusBadge status={device.status} label={device.status} /></td>
-                  <td>{device.deviceInstance}</td>
-                  <td>{device.objectName || '—'}</td>
-                  <td>{device.vendor || device.vendorName || '—'}</td>
-                  <td>{device.model || device.modelName || '—'}</td>
-                  <td className="mono">
-                    {device.transport === 'BACnet MS/TP' || device.transport === 'mstp'
-                      ? (device.macAddress != null ? `MAC ${device.macAddress}` : '—')
-                      : (device.address || '—')}
-                  </td>
-                  <td>{device.network}</td>
-                  <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-sentry-secondary btn-sm"
-                      onClick={(e) => handleDelete(e, device.id)}
-                      disabled={loading}
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))
+              devices.map((device) => {
+                const seenLatest = Boolean(latestSessionId)
+                  && device.discoverySessionId === latestSessionId;
+                return (
+                  <tr
+                    key={device.id}
+                    className="device-row-clickable"
+                    onClick={() => navigate(`/devices/${device.id}`)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(k) => k.key === 'Enter' && navigate(`/devices/${device.id}`)}
+                  >
+                    <td>
+                      <StatusBadge status={device.status} label={device.status} />
+                      {seenLatest && (
+                        <span
+                          className="status-badge badge-running"
+                          style={{ marginLeft: '0.4rem' }}
+                          title="Responded in the most recent scan"
+                        >
+                          Seen in latest scan
+                        </span>
+                      )}
+                    </td>
+                    <td>{device.network || device.transport}</td>
+                    <td>{device.networkNumber ?? '—'}</td>
+                    <td className="mono">{mstpMac(device)}</td>
+                    <td>{device.deviceInstance}</td>
+                    <td>{device.objectName || '—'}</td>
+                    <td>{device.vendor || device.vendorName || '—'}</td>
+                    <td>{device.model || device.modelName || '—'}</td>
+                    <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn-sentry-secondary btn-sm"
+                        onClick={(e) => handleDelete(e, device.id)}
+                        disabled={loading}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </Table>
@@ -203,6 +244,9 @@ export default function DevicesPage() {
           </button>
           <button type="button" className="btn btn-sentry-secondary" onClick={handleDiscoverMstp} disabled={loading}>
             Discover BACnet MS/TP
+          </button>
+          <button type="button" className="btn btn-sentry-secondary" onClick={handleClearSession} disabled={loading}>
+            Clear Latest Scan
           </button>
           <button type="button" className="btn btn-sentry-danger" onClick={handleClear} disabled={loading || devices.length === 0}>
             Clear Inventory

@@ -12,6 +12,7 @@ const {
   verifyDataCrc,
 } = require('./mstpCrc');
 const { MstpTokenEngine } = require('./mstpTokenEngine');
+const bacnetApdu = require('./bacnetApduCodec');
 
 const MSTP_FRAME_TYPE = {
   TOKEN: 0x00,
@@ -85,6 +86,12 @@ let lastSession = null;
 
 let processCleanupRegistered = false;
 let activeDiscovery = null;
+let activePointDiscovery = null;
+
+const DEFAULT_POINT_REQUEST_TIMEOUT_MS = 4000;
+const DEFAULT_POINT_MAX_RETRIES = 2;
+const DEFAULT_POINT_SESSION_TIMEOUT_MS = 120000;
+const MAX_POINT_OBJECTS = 300;
 
 function logMstp(message, level = 'info') {
   const logFn = level === 'error' ? console.error : console.log;
@@ -965,7 +972,7 @@ async function flushTokenEngineTx(tokenEngine, port, recordSessionLog) {
       frameType === MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY
       || frameType === MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY
     ) {
-      recordSessionLog('info', 'Token-gated Who-Is transmitted', {
+      recordSessionLog('info', 'Token-gated BACnet frame transmitted', {
         frameBytes: frame.length,
         macAddress: frame[4],
       });
@@ -1007,6 +1014,12 @@ function createDiscoveryTokenEngine(config, recordSessionLog) {
 }
 
 async function discover(input = {}) {
+  if (activePointDiscovery) {
+    const error = new Error('BACnet MS/TP point discovery is already in progress');
+    error.statusCode = 409;
+    error.code = 'POINT_DISCOVERY_IN_PROGRESS';
+    throw error;
+  }
   if (activeDiscovery) {
     const error = new Error('BACnet MS/TP discovery is already in progress');
     error.statusCode = 409;
@@ -1414,6 +1427,409 @@ async function discover(input = {}) {
   }
 }
 
+function mapPropertiesToPointFields(properties = {}) {
+  const get = (propertyId) => properties[propertyId]?.value ?? null;
+  return {
+    objectName: get(bacnetApdu.BACNET_PROPERTIES.objectName),
+    description: get(bacnetApdu.BACNET_PROPERTIES.description),
+    presentValue: get(bacnetApdu.BACNET_PROPERTIES.presentValue),
+    units: get(bacnetApdu.BACNET_PROPERTIES.units),
+    statusFlags: get(bacnetApdu.BACNET_PROPERTIES.statusFlags),
+    reliability: get(bacnetApdu.BACNET_PROPERTIES.reliability),
+    outOfService: get(bacnetApdu.BACNET_PROPERTIES.outOfService),
+  };
+}
+
+async function readPropertiesForObject({
+  objectType,
+  instance,
+  sendConfirmedRequest,
+  recordLog,
+}) {
+  const label = `${bacnetApdu.objectTypeLabel(objectType)}:${instance}`;
+
+  try {
+    const rpmApdu = bacnetApdu.encodeReadPropertyMultiple(
+      0,
+      objectType,
+      instance,
+      bacnetApdu.POINT_DISCOVERY_PROPERTIES,
+    );
+    const rpmResponse = await sendConfirmedRequest(
+      rpmApdu,
+      'readPropertyMultiple',
+      `RPM ${label}`,
+    );
+    if (rpmResponse.properties && Object.keys(rpmResponse.properties).length > 0) {
+      recordLog('debug', `ReadPropertyMultiple succeeded for ${label}`);
+      return mapPropertiesToPointFields(rpmResponse.properties);
+    }
+  } catch (err) {
+    recordLog('debug', `ReadPropertyMultiple failed for ${label}: ${err.message} — falling back to ReadProperty`);
+  }
+
+  const properties = {};
+  for (const propertyId of bacnetApdu.POINT_DISCOVERY_PROPERTIES) {
+    try {
+      const apdu = bacnetApdu.encodeReadProperty(0, objectType, instance, propertyId);
+      const response = await sendConfirmedRequest(apdu, 'readProperty', `RP ${label} prop ${propertyId}`);
+      if (response.presentValue != null || response.propertyValue) {
+        properties[propertyId] = {
+          propertyId,
+          value: response.presentValue ?? bacnetApdu.formatPresentValue(response.propertyValue),
+        };
+      }
+    } catch (err) {
+      recordLog('debug', `ReadProperty ${propertyId} failed for ${label}: ${err.message}`);
+    }
+  }
+
+  return mapPropertiesToPointFields(properties);
+}
+
+async function discoverPointsForDevice(options = {}) {
+  if (activeDiscovery) {
+    const error = new Error('BACnet MS/TP discovery is already in progress');
+    error.statusCode = 409;
+    error.code = 'DISCOVERY_IN_PROGRESS';
+    throw error;
+  }
+  if (activePointDiscovery) {
+    const error = new Error('BACnet MS/TP point discovery is already in progress');
+    error.statusCode = 409;
+    error.code = 'POINT_DISCOVERY_IN_PROGRESS';
+    throw error;
+  }
+
+  const managedDevice = options.managedDevice;
+  if (!managedDevice) {
+    const error = new Error('managedDevice is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const startedAt = Date.now();
+  const config = validateConfig(normalizeConfig(options.config || getDefaultConfig()));
+  const requestTimeoutMs = Number(options.requestTimeoutMs ?? DEFAULT_POINT_REQUEST_TIMEOUT_MS);
+  const maxRetries = Number(options.maxRetries ?? DEFAULT_POINT_MAX_RETRIES);
+  const sessionTimeoutMs = Number(options.timeoutMs ?? DEFAULT_POINT_SESSION_TIMEOUT_MS);
+  const targetMac = managedDevice.mstpMacAddress;
+  const deviceInstance = Number(managedDevice.deviceInstance);
+
+  if (!Number.isInteger(targetMac) || targetMac < 0 || targetMac > 127) {
+    const error = new Error('Managed device has an invalid MS/TP MAC address');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!config.tokenMode) {
+    const error = new Error('Token Mode must be enabled for MS/TP point discovery');
+    error.statusCode = 400;
+    error.code = 'TOKEN_MODE_REQUIRED';
+    throw error;
+  }
+
+  ensureSerialMonitorNotRunning();
+
+  const sessionLogs = [];
+  const recordLog = (level, message, extra = {}) => {
+    const enriched = {
+      managedDeviceId: managedDevice.id,
+      mstpMacAddress: targetMac,
+      deviceInstance,
+      ...extra,
+    };
+    sessionLogs.push({
+      time: new Date().toISOString(),
+      level,
+      source: 'bacnet-mstp-points',
+      message,
+      ...enriched,
+    });
+    addDiscoveryLog(level, `[points] ${message}`, enriched);
+  };
+
+  const wasOpenBefore = interfaceState.open;
+  const openedForSession = !wasOpenBefore;
+  let rxBuffer = Buffer.alloc(0);
+  let dataListener = null;
+  let engineTickTimer = null;
+  let tokenEngine = null;
+  let invokeIdCounter = 0;
+  const pending = new Map();
+
+  const nextInvokeId = () => {
+    invokeIdCounter = (invokeIdCounter % 255) + 1;
+    return invokeIdCounter;
+  };
+
+  activePointDiscovery = {
+    startedAt,
+    managedDeviceId: managedDevice.id,
+    targetMac,
+    deviceInstance,
+  };
+
+  try {
+    if (!interfaceState.open) {
+      await openInterface(config);
+    } else {
+      Object.assign(interfaceState, {
+        macAddress: config.macAddress,
+        maxMaster: config.maxMaster,
+        maxInfoFrames: config.maxInfoFrames,
+        networkNumber: config.networkNumber,
+        tokenMode: config.tokenMode,
+      });
+    }
+
+    const port = interfaceState.serialPort;
+    if (!port || !port.isOpen) {
+      throw new Error('MS/TP serial port is not open');
+    }
+
+    tokenEngine = createDiscoveryTokenEngine(config, recordLog);
+    recordLog('info', `Point discovery started for managed device MAC ${targetMac}, instance ${deviceInstance}`);
+
+    const waitForResponse = (invokeId, expectType) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(invokeId);
+        reject(new Error(`No response within ${requestTimeoutMs}ms (invoke ${invokeId})`));
+      }, requestTimeoutMs);
+      pending.set(invokeId, { resolve, reject, timer, expectType });
+    });
+
+    const sendConfirmedRequest = async (apduTemplate, expectType, label) => {
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+        const invokeId = nextInvokeId();
+        const apdu = Buffer.from(apduTemplate);
+        apdu[1] = invokeId;
+        const payload = Buffer.concat([bacnetApdu.buildConfirmedNpdu(), apdu]);
+        const frame = buildMstpFrame(
+          MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY,
+          targetMac,
+          config.macAddress,
+          payload,
+        );
+
+        const responsePromise = waitForResponse(invokeId, expectType);
+        tokenEngine.queueBacnetFrame(frame, label);
+        scheduleTokenEngineWork(tokenEngine, port, recordLog);
+        recordLog('info', `Point discovery request queued — ${label} (invoke ${invokeId}, attempt ${attempt}/${maxRetries})`);
+
+        try {
+          const response = await responsePromise;
+          recordLog('info', `Point discovery response received — ${label} (invoke ${invokeId})`);
+          return response;
+        } catch (err) {
+          lastError = err;
+          recordLog('warn', `Point discovery request failed — ${label} (invoke ${invokeId}): ${err.message}`);
+        }
+      }
+      throw lastError || new Error(`Point discovery request failed — ${label}`);
+    };
+
+    dataListener = (chunk) => {
+      try {
+        interfaceState.rxBytes += chunk.length;
+        interfaceState.lastActivityAt = new Date().toISOString();
+        rxBuffer = Buffer.concat([rxBuffer, chunk]);
+
+        const { frames, remaining } = parseMstpFrames(rxBuffer);
+        rxBuffer = remaining;
+
+        for (const frame of frames) {
+          const pfmReply = tokenEngine.handleReceivedFrame(frame);
+          if (pfmReply) {
+            enqueueTokenEngineTx(async () => {
+              await delay(tokenEngine.tTurnaround);
+              await writeToPort(port, pfmReply);
+              interfaceState.txBytes += pfmReply.length;
+              interfaceState.lastActivityAt = new Date().toISOString();
+              tokenEngine.notifyTransmitted();
+              recordLog('info', 'Reply To Poll For Master transmitted during point discovery', {
+                frameBytes: pfmReply.length,
+                destinationMac: frame.source,
+              });
+            }).catch((err) => {
+              recordLog('warn', `Poll For Master reply failed during point discovery: ${err.message}`);
+            });
+          }
+          scheduleTokenEngineWork(tokenEngine, port, recordLog);
+
+          if (frame.source !== targetMac) continue;
+          if (!frame.headerCrcValid || frame.dataCrcValid === false || !frame.data?.length) continue;
+          if (
+            frame.frameType !== MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY
+            && frame.frameType !== MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY
+          ) {
+            continue;
+          }
+
+          const npduInfo = findNpduApdu(frame.data);
+          if (npduInfo?.apduOffset == null) continue;
+
+          const parsed = bacnetApdu.parseConfirmedResponse(frame.data, npduInfo.apduOffset);
+          if (parsed.invokeId == null) continue;
+
+          const pendingReq = pending.get(parsed.invokeId);
+          if (!pendingReq) continue;
+
+          clearTimeout(pendingReq.timer);
+          pending.delete(parsed.invokeId);
+
+          if (parsed.type === 'error' || parsed.type === 'abort' || parsed.type === 'reject') {
+            pendingReq.reject(new Error(`${parsed.type} response (invoke ${parsed.invokeId})`));
+            recordLog('warn', `Point discovery ${parsed.type} response from MAC ${targetMac}`, {
+              invokeId: parsed.invokeId,
+            });
+          } else {
+            pendingReq.resolve({
+              ...parsed,
+              responseData: frame.data,
+              apduOffset: npduInfo.apduOffset,
+            });
+          }
+        }
+      } catch (err) {
+        recordLog('warn', `Point discovery RX parse error (ignored): ${err.message}`);
+      }
+    };
+
+    port.on('data', dataListener);
+    engineTickTimer = setInterval(() => {
+      scheduleTokenEngineWork(tokenEngine, port, recordLog);
+    }, Math.max(1, Math.floor(tokenEngine.tSlot)));
+
+    const sessionDeadline = Date.now() + sessionTimeoutMs;
+    const ensureSessionTime = () => {
+      if (Date.now() > sessionDeadline) {
+        const error = new Error(`Point discovery session timed out after ${sessionTimeoutMs}ms`);
+        error.code = 'POINT_DISCOVERY_TIMEOUT';
+        throw error;
+      }
+    };
+
+    ensureSessionTime();
+    const objectListInvoke = nextInvokeId();
+    const objectListApdu = bacnetApdu.encodeReadProperty(
+      objectListInvoke,
+      bacnetApdu.DEVICE_OBJECT_TYPE,
+      deviceInstance,
+      bacnetApdu.BACNET_PROPERTIES.objectList,
+    );
+    const objectListResponse = await sendConfirmedRequest(
+      objectListApdu,
+      'readProperty',
+      'objectList',
+    );
+    const objectList = bacnetApdu.extractObjectListFromAck(
+      objectListResponse,
+      objectListResponse.responseData,
+      objectListResponse.apduOffset,
+    );
+
+    if (!objectList.length) {
+      throw new Error('Device objectList is empty or could not be decoded');
+    }
+
+    recordLog('info', `objectList read — ${objectList.length} object(s) reported by device`);
+
+    const points = [];
+    const failures = [];
+    const objectsToRead = objectList
+      .filter((obj) => !(obj.objectType === bacnetApdu.DEVICE_OBJECT_TYPE && obj.instance === deviceInstance))
+      .slice(0, MAX_POINT_OBJECTS);
+
+    for (const obj of objectsToRead) {
+      ensureSessionTime();
+      try {
+        const fields = await readPropertiesForObject({
+          objectType: obj.objectType,
+          instance: obj.instance,
+          sendConfirmedRequest,
+          recordLog,
+        });
+        const now = new Date().toISOString();
+        points.push({
+          objectType: obj.objectType,
+          objectTypeLabel: bacnetApdu.objectTypeLabel(obj.objectType),
+          objectInstance: obj.instance,
+          ...fields,
+          discoveredAt: now,
+          lastReadAt: now,
+        });
+      } catch (err) {
+        failures.push({
+          objectType: obj.objectType,
+          objectInstance: obj.instance,
+          error: err.message,
+        });
+        recordLog('warn', `Failed to read object ${bacnetApdu.objectTypeLabel(obj.objectType)}:${obj.instance}: ${err.message}`);
+      }
+    }
+
+    const durationMs = Date.now() - startedAt;
+    recordLog('info', `Point discovery complete — ${points.length} point(s), ${failures.length} failure(s) in ${durationMs}ms`);
+
+    return {
+      success: true,
+      managedDeviceId: managedDevice.id,
+      mstpMacAddress: targetMac,
+      deviceInstance,
+      durationMs,
+      pointsFound: points.length,
+      points,
+      failures,
+      logs: sessionLogs,
+      message: failures.length > 0
+        ? `Discovered ${points.length} point(s) with ${failures.length} object read failure(s).`
+        : undefined,
+    };
+  } catch (err) {
+    const durationMs = Date.now() - startedAt;
+    recordLog('error', `Point discovery failed: ${err.message}`);
+    const error = new Error(err.message || 'Point discovery failed');
+    error.statusCode = err.statusCode || 502;
+    error.code = err.code || 'POINT_DISCOVERY_FAILED';
+    error.result = {
+      success: false,
+      error: err.message,
+      message: err.message,
+      managedDeviceId: managedDevice.id,
+      mstpMacAddress: targetMac,
+      deviceInstance,
+      durationMs,
+      pointsFound: 0,
+      points: [],
+      failures: [],
+      logs: sessionLogs,
+    };
+    throw error;
+  } finally {
+    if (engineTickTimer) {
+      clearInterval(engineTickTimer);
+      engineTickTimer = null;
+    }
+
+    const port = interfaceState.serialPort;
+    if (port && dataListener) {
+      try {
+        port.removeListener('data', dataListener);
+      } catch {
+        // ignore listener cleanup failures
+      }
+    }
+
+    activePointDiscovery = null;
+
+    if (openedForSession) {
+      await closeInterfaceInternal('Point discovery finished');
+    }
+  }
+}
+
 module.exports = {
   getDefaultConfig,
   normalizeConfig,
@@ -1426,6 +1842,7 @@ module.exports = {
   openInterface,
   closeInterface,
   discover,
+  discoverPointsForDevice,
   buildWhoIsNpdu,
   buildMstpFrame,
   parseMstpFrames,

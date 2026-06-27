@@ -1,6 +1,7 @@
 const express = require('express');
 const deviceService = require('../services/devices');
 const managedDevices = require('../services/devices/managedDevices');
+const managedPoints = require('../services/devices/managedPoints');
 const logsService = require('../services/logs');
 
 const router = express.Router();
@@ -55,6 +56,45 @@ router.get('/managed/:id', (req, res) => {
   const device = managedDevices.getManagedDeviceById(req.params.id);
   if (!device) return res.status(404).json({ error: 'Managed device not found' });
   res.json(device);
+});
+
+router.get('/managed/:id/points', (req, res) => {
+  const device = managedDevices.getManagedDeviceById(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Managed device not found' });
+  res.json(managedPoints.listPointsByManagedDeviceId(req.params.id));
+});
+
+router.post('/managed/:id/discover-points', async (req, res, next) => {
+  try {
+    const result = await managedPoints.discoverPointsForManagedDevice(req.params.id);
+    logsService.addLog({
+      level: 'info',
+      service: 'bacnet',
+      message: `Point discovery completed for managed device ${req.params.id} — ${result.pointsFound} point(s)`,
+    });
+    res.json(result);
+  } catch (err) {
+    if (err.result) {
+      logsService.addLog({
+        level: 'error',
+        service: 'bacnet',
+        message: `Point discovery failed for managed device ${req.params.id}: ${err.message}`,
+      });
+      return res.status(err.statusCode || 502).json(err.result);
+    }
+    next(err);
+  }
+});
+
+router.delete('/managed/:id/points', (req, res) => {
+  const result = managedPoints.clearPointsForManagedDevice(req.params.id);
+  if (!result) return res.status(404).json({ error: 'Managed device not found' });
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: `Cleared ${result.removedCount} point(s) for managed device ${req.params.id}`,
+  });
+  res.json(result);
 });
 
 router.post('/clear', (_req, res) => {

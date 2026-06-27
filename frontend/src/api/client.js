@@ -12,9 +12,10 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    const err = new Error(error.error || `Request failed: ${response.status}`);
+    const err = new Error(error.error || error.message || `Request failed: ${response.status}`);
     err.code = error.code;
     err.status = response.status;
+    err.body = error;
     throw err;
   }
 
@@ -49,6 +50,9 @@ export const api = {
   addManagedDevice: (data) => request('/devices/managed', { method: 'POST', body: JSON.stringify(data) }),
   updateManagedDevice: (id, data) => request(`/devices/managed/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   unmanageDevice: (id) => request(`/devices/managed/${id}`, { method: 'DELETE' }),
+  getManagedDevicePoints: (id) => request(`/devices/managed/${id}/points`),
+  discoverManagedDevicePoints: (id) => request(`/devices/managed/${id}/discover-points`, { method: 'POST' }),
+  clearManagedDevicePoints: (id) => request(`/devices/managed/${id}/points`, { method: 'DELETE' }),
   getDevice: (id) => request(`/devices/${id}`),
   getDeviceHealth: (id) => request(`/devices/${id}/health`),
   getDeviceObjects: (id) => request(`/devices/${id}/objects`),

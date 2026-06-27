@@ -76,7 +76,7 @@ class MstpTokenEngine {
     this.lastSilenceAt = 0;
     this.lastStateChangeAt = Date.now();
 
-    this.whoIsQueue = [];
+    this.bacnetFrameQueue = [];
     this.pendingPassToken = false;
 
     this.stats = {
@@ -100,7 +100,7 @@ class MstpTokenEngine {
       nextStation: this.nextStation,
       pollStation: this.pollStation,
       seenRingActivity: this.seenRingActivity,
-      whoIsQueued: this.whoIsQueue.length,
+      bacnetFramesQueued: this.bacnetFrameQueue.length,
       stats: { ...this.stats },
       timings: {
         tSlotMs: this.tSlot,
@@ -111,9 +111,13 @@ class MstpTokenEngine {
   }
 
   queueWhoIsFrame(mstpFrame) {
+    this.queueBacnetFrame(mstpFrame, 'Who-Is');
+  }
+
+  queueBacnetFrame(mstpFrame, label = 'BACnet') {
     if (!mstpFrame || !mstpFrame.length) return;
-    this.whoIsQueue.push(Buffer.from(mstpFrame));
-    this.onLog('debug', `Who-Is queued for token-gated send (${this.whoIsQueue.length} in queue)`);
+    this.bacnetFrameQueue.push(Buffer.from(mstpFrame));
+    this.onLog('debug', `${label} frame queued for token-gated send (${this.bacnetFrameQueue.length} in queue)`);
   }
 
   /**
@@ -181,22 +185,22 @@ class MstpTokenEngine {
         return this._emitPassToken();
       }
 
-      if (this.frameCount < this.maxInfoFrames && this.whoIsQueue.length > 0) {
-        const whoIsFrame = this.whoIsQueue.shift();
+      if (this.frameCount < this.maxInfoFrames && this.bacnetFrameQueue.length > 0) {
+        const bacnetFrame = this.bacnetFrameQueue.shift();
         this.frameCount += 1;
         this.stats.whoIsSentWhileHoldingToken += 1;
-        this.onLog('info', `Who-Is sent while holding token (frame ${this.frameCount}/${this.maxInfoFrames})`, {
+        this.onLog('info', `BACnet frame sent while holding token (frame ${this.frameCount}/${this.maxInfoFrames})`, {
           macAddress: this.macAddress,
-          frameBytes: whoIsFrame.length,
+          frameBytes: bacnetFrame.length,
         });
-        if (this.frameCount >= this.maxInfoFrames || this.whoIsQueue.length === 0) {
+        if (this.frameCount >= this.maxInfoFrames || this.bacnetFrameQueue.length === 0) {
           this.pendingPassToken = true;
         }
-        return whoIsFrame;
+        return bacnetFrame;
       }
 
-      if (this.whoIsQueue.length === 0) {
-        this.onLog('debug', 'Token held with empty Who-Is queue — passing token');
+      if (this.bacnetFrameQueue.length === 0) {
+        this.onLog('debug', 'Token held with empty BACnet queue — passing token');
         return this._emitPassToken();
       }
     }

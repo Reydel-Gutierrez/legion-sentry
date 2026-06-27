@@ -1,6 +1,7 @@
 const managedDevices = require('./managedDevices');
 const pointsStore = require('./managedPointsStore');
 const bacnetMstpService = require('../bacnet/bacnetMstp.service');
+const { sanitizeText } = require('../bacnet/bacnetApduCodec');
 
 function useMockData() {
   return process.env.MOCK_DATA === 'true';
@@ -14,6 +15,8 @@ function pointKey(managedDeviceId, objectType, objectInstance) {
 function normalizePointForApi(point) {
   return {
     ...point,
+    objectName: sanitizeText(point.objectName),
+    description: sanitizeText(point.description),
     status: formatStatusFlags(point.statusFlags),
   };
 }

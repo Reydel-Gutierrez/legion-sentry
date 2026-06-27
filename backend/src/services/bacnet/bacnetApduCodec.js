@@ -227,13 +227,82 @@ function readSigned(data, offset, length) {
   return value;
 }
 
+// BACnet character set codes (ASHRAE 135, BACnetCharacterString):
+//   0 = ANSI X3.4 / UTF-8
+//   1 = IBM/Microsoft DBCS
+//   2 = JIS X 0208
+//   3 = UCS-4   (UTF-32, big-endian)
+//   4 = UCS-2   (UTF-16, big-endian)
+//   5 = ISO 8859-1 (Latin-1)
+const BACNET_CHARSET = {
+  UTF8: 0,
+  DBCS: 1,
+  JIS: 2,
+  UCS4: 3,
+  UCS2: 4,
+  ISO8859_1: 5,
+};
+
+function decodeUcs2BigEndian(buf) {
+  let out = '';
+  for (let i = 0; i + 1 < buf.length; i += 2) {
+    out += String.fromCharCode((buf[i] << 8) | buf[i + 1]);
+  }
+  return out;
+}
+
+function decodeUcs4BigEndian(buf) {
+  let out = '';
+  for (let i = 0; i + 3 < buf.length; i += 4) {
+    const codePoint = (buf[i] * 0x1000000)
+      + (buf[i + 1] * 0x10000)
+      + (buf[i + 2] * 0x100)
+      + buf[i + 3];
+    try {
+      out += String.fromCodePoint(codePoint);
+    } catch {
+      // skip invalid code points
+    }
+  }
+  return out;
+}
+
+// Remove NUL and C0/C1 control characters that some devices leave in (or that
+// arise from wide-character encodings). Printable text — including spaces and
+// extended Latin — is preserved. This keeps stored/displayed names clean while
+// the wire bytes are decoded faithfully first.
+function sanitizeText(value) {
+  if (value == null) return value;
+  // eslint-disable-next-line no-control-regex
+  return String(value).replace(/[\u0000-\u001f\u007f-\u009f]/g, '').trim();
+}
+
 function decodeCharacterString(slice) {
   if (!slice.length) return '';
   const charset = slice[0];
   const body = slice.slice(1);
-  if (charset === 0) return body.toString('utf8');
-  if (charset === 5) return body.toString('utf16le');
-  return body.toString('latin1');
+
+  let decoded;
+  switch (charset) {
+    case BACNET_CHARSET.UTF8:
+      decoded = body.toString('utf8');
+      break;
+    case BACNET_CHARSET.UCS2:
+      decoded = decodeUcs2BigEndian(body);
+      break;
+    case BACNET_CHARSET.UCS4:
+      decoded = decodeUcs4BigEndian(body);
+      break;
+    case BACNET_CHARSET.ISO8859_1:
+      decoded = body.toString('latin1');
+      break;
+    default:
+      // DBCS/JIS and anything unexpected: best-effort UTF-8, then sanitize.
+      decoded = body.toString('utf8');
+      break;
+  }
+
+  return sanitizeText(decoded);
 }
 
 function formatBitString(slice) {
@@ -288,7 +357,13 @@ function decodeApplicationValue(data, offset) {
     case 6:
       return { type: 'octetString', value: slice.toString('hex'), nextOffset };
     case 7:
-      return { type: 'characterString', value: decodeCharacterString(slice), nextOffset };
+      return {
+        type: 'characterString',
+        value: decodeCharacterString(slice),
+        charset: slice.length ? slice[0] : null,
+        rawHex: slice.toString('hex'),
+        nextOffset,
+      };
     case 8:
       return { type: 'bitString', value: formatBitString(slice), nextOffset };
     case 9:
@@ -501,4 +576,5 @@ module.exports = {
   firstUnsigned,
   firstObjectId,
   formatPresentValue,
+  sanitizeText,
 };

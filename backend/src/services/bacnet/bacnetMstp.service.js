@@ -1427,6 +1427,19 @@ async function discover(input = {}) {
   }
 }
 
+// Diagnostic: record the raw wire bytes + charset of an objectName so the
+// actual device encoding (UTF-8 vs UCS-2 big-endian, etc.) is verifiable.
+let objectNameSamplesLogged = 0;
+function logObjectNameEncoding(decoded, label, recordLog) {
+  if (!decoded || decoded.type !== 'characterString') return;
+  if (objectNameSamplesLogged >= 5) return;
+  objectNameSamplesLogged += 1;
+  recordLog('info', `objectName encoding sample for ${label} — charset ${decoded.charset}, raw ${decoded.rawHex}, decoded "${decoded.value}"`, {
+    charset: decoded.charset,
+    rawHex: decoded.rawHex,
+  });
+}
+
 function mapPropertiesToPointFields(properties = {}) {
   const get = (propertyId) => properties[propertyId]?.value ?? null;
   return {
@@ -1460,6 +1473,7 @@ async function readPropertiesForObject({
       `RPM ${label}`,
     );
     if (rpmResponse.properties && Object.keys(rpmResponse.properties).length > 0) {
+      logObjectNameEncoding(rpmResponse.properties[bacnetApdu.BACNET_PROPERTIES.objectName]?.raw, label, recordLog);
       recordLog('debug', `ReadPropertyMultiple succeeded for ${label}`);
       return mapPropertiesToPointFields(rpmResponse.properties);
     }
@@ -1475,7 +1489,11 @@ async function readPropertiesForObject({
         'readProperty',
         `RP ${label} prop ${propertyId}`,
       );
-      const value = bacnetApdu.formatPresentValue(response.values?.[0]);
+      const decoded = response.values?.[0];
+      const value = bacnetApdu.formatPresentValue(decoded);
+      if (propertyId === bacnetApdu.BACNET_PROPERTIES.objectName) {
+        logObjectNameEncoding(decoded, label, recordLog);
+      }
       if (value != null) {
         properties[propertyId] = { propertyId, value };
       }
@@ -1590,6 +1608,7 @@ async function discoverPointsForDevice(options = {}) {
   }
 
   ensureSerialMonitorNotRunning();
+  objectNameSamplesLogged = 0;
 
   const sessionLogs = [];
   const recordLog = (level, message, extra = {}) => {

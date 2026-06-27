@@ -11,16 +11,53 @@ import LoadingState from '../components/common/LoadingState';
 const EMPTY_IFACE_CONFIG = {
   mode: 'dhcp',
   ipAddress: '',
-  cidr: '',
+  subnetMask: '',
   gateway: '',
   dns1: '',
   dns2: '',
 };
 
+const SUBNET_MASK_TO_CIDR = {
+  '255.255.255.255': 32,
+  '255.255.255.254': 31,
+  '255.255.255.252': 30,
+  '255.255.255.248': 29,
+  '255.255.255.240': 28,
+  '255.255.255.224': 27,
+  '255.255.255.192': 26,
+  '255.255.255.128': 25,
+  '255.255.255.0': 24,
+  '255.255.254.0': 23,
+  '255.255.252.0': 22,
+  '255.255.248.0': 21,
+  '255.255.240.0': 20,
+  '255.255.224.0': 19,
+  '255.255.192.0': 18,
+  '255.255.128.0': 17,
+  '255.255.0.0': 16,
+  '255.254.0.0': 15,
+  '255.252.0.0': 14,
+  '255.248.0.0': 13,
+  '255.240.0.0': 12,
+  '255.224.0.0': 11,
+  '255.192.0.0': 10,
+  '255.128.0.0': 9,
+  '255.0.0.0': 8,
+};
+
+function subnetMaskToCidr(mask) {
+  return SUBNET_MASK_TO_CIDR[String(mask).trim()] ?? null;
+}
+
 function isEth0Unavailable(iface) {
   if (!iface || iface.status === 'not_present') return true;
   if (iface.operstate === 'unavailable') return true;
   if (iface.operstate !== 'up' && !iface.ipv4) return true;
+  return false;
+}
+
+function isWlan0Unavailable(iface) {
+  if (!iface || iface.status === 'not_present') return true;
   return false;
 }
 
@@ -93,8 +130,8 @@ function InterfaceConfigCard({
                 <input className="form-control" value={config.ipAddress} disabled={fieldsDisabled} onChange={(e) => onChange({ ipAddress: e.target.value })} placeholder="192.168.1.48" />
               </div>
               <div className="field-group">
-                <label className="form-label">CIDR</label>
-                <input className="form-control" value={config.cidr} disabled={fieldsDisabled} onChange={(e) => onChange({ cidr: e.target.value })} placeholder="24" />
+                <label className="form-label">Subnet Mask</label>
+                <input className="form-control" value={config.subnetMask} disabled={fieldsDisabled} onChange={(e) => onChange({ subnetMask: e.target.value })} placeholder="255.255.255.0" />
               </div>
               <div className="field-group">
                 <label className="form-label">Gateway</label>
@@ -159,9 +196,13 @@ export default function NetworkPage() {
       mode: config.mode,
     };
     if (config.mode === 'static') {
+      const subnetMask = config.subnetMask.trim();
       payload.ipAddress = config.ipAddress.trim();
-      payload.cidr = Number(config.cidr);
-      payload.gateway = config.gateway.trim();
+      payload.subnetMask = subnetMask;
+      const cidr = subnetMaskToCidr(subnetMask);
+      if (cidr !== null) payload.cidr = cidr;
+      const gateway = config.gateway.trim();
+      if (gateway) payload.gateway = gateway;
       payload.dns = [config.dns1, config.dns2].map((d) => d.trim()).filter(Boolean);
     }
     return payload;
@@ -169,8 +210,12 @@ export default function NetworkPage() {
 
   const handleApply = async (ifaceName, config) => {
     if (config.mode === 'static') {
-      if (!config.ipAddress || !config.cidr || !config.gateway || !config.dns1) {
-        setMessage({ type: 'error', text: 'Static configuration requires IP address, CIDR, gateway, and at least one DNS server.' });
+      if (!config.ipAddress.trim() || !config.subnetMask.trim()) {
+        setMessage({ type: 'error', text: 'Static configuration requires IP address and subnet mask. Gateway and DNS are optional.' });
+        return;
+      }
+      if (subnetMaskToCidr(config.subnetMask.trim()) === null) {
+        setMessage({ type: 'error', text: 'Subnet mask must be a valid value such as 255.255.255.0.' });
         return;
       }
     }
@@ -290,6 +335,7 @@ export default function NetworkPage() {
   const eth0 = data.eth0;
   const wlan0 = data.wlan0;
   const eth0Unavailable = isEth0Unavailable(eth0);
+  const wlan0Unavailable = isWlan0Unavailable(wlan0);
   const managerName = manager?.manager || data.manager?.name || 'unknown';
   const wlanConnection = wlan0?.connection || manager?.connections?.find((c) => c.device === 'wlan0')?.name;
 
@@ -362,6 +408,7 @@ export default function NetworkPage() {
             onApply={() => handleApply('wlan0', wlan0Config)}
             onRestoreDhcp={() => handleRestoreDhcp('wlan0')}
             loading={loading}
+            unavailableMessage={wlan0Unavailable ? 'No wireless interface detected.' : null}
           />
         </Col>
       </Row>

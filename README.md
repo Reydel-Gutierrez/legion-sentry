@@ -105,7 +105,7 @@ All other API routes require authentication except `/api/health` and `/api/syste
 | GET | `/api/system/health` | Health check (public) |
 | GET | `/api/network/status` | Live network status (interfaces, manager, hostname) |
 | GET | `/api/network/manager` | Detected network manager and active connections |
-| POST | `/api/network/apply` | Apply DHCP or static IP via NetworkManager (`nmcli`) |
+| POST | `/api/network/apply` | Apply DHCP or static IP via NetworkManager (`nmcli`); local-only static supported |
 | POST | `/api/network/restore-dhcp` | Restore DHCP on `eth0` or `wlan0` |
 | POST | `/api/network/hostname` | Set system hostname (`hostnamectl`) |
 | POST | `/api/network/reboot` | Reboot the appliance |
@@ -133,6 +133,38 @@ All other API routes require authentication except `/api/health` and `/api/syste
 ## Network Configuration (Raspberry Pi)
 
 On the Pi, Sentry applies network settings through **NetworkManager** (`nmcli`). The backend runs as user `legion` and requires passwordless `sudo` for network commands.
+
+### Static IP (local-only friendly)
+
+The Network page supports configuring Sentry as a **local-only appliance** on a LAN or
+direct connection — no internet-style settings are required. For static mode:
+
+- **IP Address** — required
+- **Subnet Mask** — required (e.g. `255.255.255.0`; converted to CIDR automatically)
+- **Gateway** — optional (leave blank for local-only / no upstream router)
+- **DNS 1 / DNS 2** — optional
+
+A valid local-only static configuration is, for example:
+
+```
+IP Address:   192.168.1.197
+Subnet Mask:  255.255.255.0
+Gateway:      (blank)
+DNS 1:        (blank)
+DNS 2:        (blank)
+```
+
+The apply endpoint accepts either payload shape for compatibility:
+
+```jsonc
+{ "interface": "eth0", "mode": "static", "ipAddress": "192.168.1.197", "subnetMask": "255.255.255.0" }
+{ "interface": "eth0", "mode": "static", "ipAddress": "192.168.1.197", "cidr": 24 }
+```
+
+Static settings are applied atomically (address + `ipv4.method manual` + gateway + DNS in a
+single `nmcli con mod`) so NetworkManager never sees `manual` without an address. Blank
+gateway/DNS are explicitly cleared. If `wlan0` is not present, the WiFi controls are hidden
+with **"No wireless interface detected."**
 
 ### Sudoers setup
 

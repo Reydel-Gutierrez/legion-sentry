@@ -66,38 +66,97 @@ function resolveConnection(interfaceName) {
   return connection.name;
 }
 
+function isValidIpv4(value) {
+  if (typeof value !== 'string') return false;
+  const parts = value.trim().split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((part) => {
+    if (!/^\d{1,3}$/.test(part)) return false;
+    const num = Number(part);
+    return num >= 0 && num <= 255;
+  });
+}
+
+function isValidContiguousSubnetMask(mask) {
+  if (!isValidIpv4(mask)) return false;
+  const octets = mask.trim().split('.').map(Number);
+  // Build the 32-bit unsigned value of the mask.
+  const value = ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
+  if (value === 0) return false; // /0 is not a usable host mask here
+  if (value === 0xffffffff) return true; // /32
+  // A contiguous mask is a run of 1s followed by a run of 0s.
+  // Inverting it + 1 must be a power of two.
+  const inverted = (~value) >>> 0;
+  return (inverted & (inverted + 1)) === 0;
+}
+
+function subnetMaskToCidr(mask) {
+  if (!isValidContiguousSubnetMask(mask)) return null;
+  const octets = mask.trim().split('.').map(Number);
+  const value = ((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3]) >>> 0;
+  let cidr = 0;
+  let v = value;
+  while (v & 0x80000000) {
+    cidr += 1;
+    v = (v << 1) >>> 0;
+  }
+  return cidr;
+}
+
 function validateStaticPayload(payload) {
-  const { ipAddress, cidr, gateway, dns } = payload;
-  if (!ipAddress || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ipAddress)) {
+  const { ipAddress, cidr, subnetMask, gateway, dns } = payload;
+
+  if (!isValidIpv4(ipAddress)) {
     const err = new Error('A valid IPv4 address is required for static configuration.');
     err.statusCode = 400;
     throw err;
   }
-  const cidrNum = Number(cidr);
+
+  // Accept either an explicit subnet mask or a numeric CIDR.
+  let cidrNum = null;
+  if (subnetMask !== undefined && subnetMask !== null && String(subnetMask).trim() !== '') {
+    cidrNum = subnetMaskToCidr(String(subnetMask).trim());
+    if (cidrNum === null) {
+      const err = new Error('Subnet mask must be a valid contiguous IPv4 mask (e.g. 255.255.255.0).');
+      err.statusCode = 400;
+      throw err;
+    }
+  } else {
+    cidrNum = Number(cidr);
+  }
+
   if (!Number.isInteger(cidrNum) || cidrNum < 1 || cidrNum > 32) {
-    const err = new Error('CIDR must be an integer between 1 and 32.');
+    const err = new Error('A valid subnet mask or CIDR (1–32) is required for static configuration.');
     err.statusCode = 400;
     throw err;
   }
-  if (!gateway || !/^\d{1,3}(\.\d{1,3}){3}$/.test(gateway)) {
-    const err = new Error('A valid gateway is required for static configuration.');
+
+  // Gateway is optional. Validate only when provided.
+  const gatewayValue = gateway === undefined || gateway === null ? '' : String(gateway).trim();
+  if (gatewayValue && !isValidIpv4(gatewayValue)) {
+    const err = new Error(`Invalid gateway address: ${gatewayValue}`);
     err.statusCode = 400;
     throw err;
   }
-  const dnsList = Array.isArray(dns) ? dns.filter(Boolean) : [];
-  if (dnsList.length === 0) {
-    const err = new Error('At least one DNS server is required for static configuration.');
-    err.statusCode = 400;
-    throw err;
-  }
+
+  // DNS is optional. Validate each entry only when provided.
+  const dnsList = Array.isArray(dns)
+    ? dns.map((d) => String(d).trim()).filter(Boolean)
+    : [];
   for (const server of dnsList) {
-    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(server)) {
+    if (!isValidIpv4(server)) {
       const err = new Error(`Invalid DNS server: ${server}`);
       err.statusCode = 400;
       throw err;
     }
   }
-  return { ipAddress, cidr: cidrNum, gateway, dns: dnsList };
+
+  return {
+    ipAddress: String(ipAddress).trim(),
+    cidr: cidrNum,
+    gateway: gatewayValue,
+    dns: dnsList,
+  };
 }
 
 function applyDhcpToConnection(connectionName) {
@@ -111,11 +170,23 @@ function applyDhcpToConnection(connectionName) {
 
 function applyStaticToConnection(connectionName, staticConfig) {
   const quoted = shellQuote(connectionName);
-  const dnsValue = staticConfig.dns.join(' ');
-  execSudoNmcli(`con mod ${quoted} ipv4.method manual`);
-  execSudoNmcli(`con mod ${quoted} ipv4.addresses "${staticConfig.ipAddress}/${staticConfig.cidr}"`);
-  execSudoNmcli(`con mod ${quoted} ipv4.gateway ${shellQuote(staticConfig.gateway)}`);
-  execSudoNmcli(`con mod ${quoted} ipv4.dns ${shellQuote(dnsValue)}`);
+  const address = `${staticConfig.ipAddress}/${staticConfig.cidr}`;
+  const gatewayValue = staticConfig.gateway || '';
+  const dnsValue = (staticConfig.dns || []).join(' ');
+
+  // Apply everything in a single `con mod` so the address exists before
+  // (and in the same transaction as) `ipv4.method manual`. NetworkManager
+  // rejects `manual` when no address/route is set, so ordering matters.
+  // Blank gateway/DNS are explicitly cleared with "".
+  const args = [
+    `con mod ${quoted}`,
+    `ipv4.addresses ${shellQuote(address)}`,
+    'ipv4.method manual',
+    `ipv4.gateway ${shellQuote(gatewayValue)}`,
+    `ipv4.dns ${shellQuote(dnsValue)}`,
+  ].join(' ');
+
+  execSudoNmcli(args);
   execSudoNmcli(`con up ${quoted}`);
 }
 
@@ -229,4 +300,8 @@ module.exports = {
   restoreDhcp,
   setHostname,
   rebootDevice,
+  validateStaticPayload,
+  isValidIpv4,
+  subnetMaskToCidr,
+  isValidContiguousSubnetMask,
 };

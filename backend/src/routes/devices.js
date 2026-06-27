@@ -1,11 +1,60 @@
 const express = require('express');
 const deviceService = require('../services/devices');
+const managedDevices = require('../services/devices/managedDevices');
 const logsService = require('../services/logs');
 
 const router = express.Router();
 
 router.get('/', (_req, res) => {
   res.json(deviceService.getDevices());
+});
+
+router.get('/managed', (_req, res) => {
+  res.json(managedDevices.getManagedDevices());
+});
+
+router.post('/managed', (req, res, next) => {
+  try {
+    const result = managedDevices.addManagedDevice(req.body || {});
+    logsService.addLog({
+      level: 'info',
+      service: 'bacnet',
+      message: `MS/TP device added to managed list — MAC ${result.device.mstpMacAddress}, instance ${result.device.deviceInstance}`,
+    });
+    res.status(201).json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/managed/:id', (req, res) => {
+  const result = managedDevices.updateManagedDevice(req.params.id, req.body || {});
+  if (!result) return res.status(404).json({ error: 'Managed device not found' });
+
+  const action = req.body?.enabled === false ? 'disabled' : req.body?.enabled === true ? 'enabled' : 'updated';
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: `Managed MS/TP device ${action} — MAC ${result.device.mstpMacAddress}, instance ${result.device.deviceInstance}`,
+  });
+  res.json(result);
+});
+
+router.delete('/managed/:id', (req, res) => {
+  const result = managedDevices.unmanageDevice(req.params.id);
+  if (!result) return res.status(404).json({ error: 'Managed device not found' });
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: `MS/TP device removed from managed list — MAC ${result.removed.mstpMacAddress}, instance ${result.removed.deviceInstance}`,
+  });
+  res.json(result);
+});
+
+router.get('/managed/:id', (req, res) => {
+  const device = managedDevices.getManagedDeviceById(req.params.id);
+  if (!device) return res.status(404).json({ error: 'Managed device not found' });
+  res.json(device);
 });
 
 router.post('/clear', (_req, res) => {

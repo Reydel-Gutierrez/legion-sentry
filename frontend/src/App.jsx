@@ -4,6 +4,7 @@ import AppLayout from './components/layout/AppLayout';
 import LoginPage from './pages/Login';
 import DashboardPage from './pages/Dashboard';
 import DevicesPage from './pages/Devices';
+import ManagedDevicesPage from './pages/ManagedDevices';
 import DeviceDetailPage from './pages/DeviceDetail';
 import NetworkPage from './pages/Network';
 import BacnetPage from './pages/Bacnet';
@@ -27,6 +28,7 @@ export default function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="devices" element={<DevicesPage />} />
+        <Route path="managed-devices" element={<ManagedDevicesPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />
         <Route path="network" element={<NetworkPage />} />
         <Route path="bacnet" element={<BacnetPage />} />

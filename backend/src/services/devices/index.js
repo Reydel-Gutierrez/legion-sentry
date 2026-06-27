@@ -1,5 +1,6 @@
 const mockData = require('./mockData');
 const inventory = require('./inventory');
+const managedDevices = require('./managedDevices');
 const bacnetIpService = require('../bacnet/bacnetIp.service');
 const { DEVICE_HEALTH } = require('../../lib/deviceStates');
 
@@ -432,6 +433,8 @@ async function ingestBacnetMstpDiscovery(result) {
   persistDevices(merged);
   hasScanned = true;
   latestMstpDiscoverySessionId = sessionId;
+  managedDevices.setLatestMstpDiscoverySessionId(sessionId);
+  managedDevices.syncManagedDevicesFromInventory(merged);
 
   const mstpInventory = merged.filter(isMstpTransport);
 
@@ -457,6 +460,7 @@ function clearLatestScanSession() {
   // Forget which devices were seen in the latest scan without removing any
   // persistent inventory.
   latestMstpDiscoverySessionId = null;
+  managedDevices.setLatestMstpDiscoverySessionId(null);
   return { success: true, latestDiscoverySessionId: null };
 }
 

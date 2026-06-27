@@ -4,6 +4,7 @@ import BrandIdentity from '../common/BrandIdentity';
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', end: true, icon: 'dashboard' },
   { to: '/devices', label: 'Devices', icon: 'devices' },
+  { to: '/managed-devices', label: 'Managed Devices', icon: 'managed' },
   { to: '/network', label: 'Network', icon: 'network' },
   { to: '/bacnet', label: 'BACnet', icon: 'bacnet' },
   { to: '/modbus', label: 'Modbus', icon: 'modbus' },
@@ -23,6 +24,11 @@ function NavIcon({ name }) {
     devices: (
       <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
         <path d="M4 3h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4a1 1 0 011-1zm2 3v2h8V6H6zm0 4v2h5v-2H6z" />
+      </svg>
+    ),
+    managed: (
+      <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path d="M10 2a4 4 0 00-4 4v1H5a2 2 0 00-2 2v7a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-1V6a4 4 0 00-4-4zm-2 5V6a2 2 0 114 0v1H8zm2 4a1.5 1.5 0 100 3 1.5 1.5 0 000-3z" />
       </svg>
     ),
     network: (
@@ -82,7 +88,9 @@ export default function Sidebar() {
               to={item.to}
               end={item.end}
               className={({ isActive }) => {
-                const active = isActive || (item.to === '/devices' && location.pathname.startsWith('/devices/'));
+                const active = isActive
+                  || (item.to === '/devices' && location.pathname.startsWith('/devices/'))
+                  || (item.to === '/managed-devices' && location.pathname.startsWith('/managed-devices'));
                 return `nav-link${active ? ' active' : ''}`;
               }}
             >

@@ -230,12 +230,14 @@ export default function BacnetPage() {
   const [message, setMessage] = useState(null);
   const [loading, setLoading] = useState(false);
   const [missedDevices, setMissedDevices] = useState([]);
+  const [managedKeys, setManagedKeys] = useState(new Set());
 
   const load = useCallback(async () => {
-    const [status, mstp, deviceData, logData, frameData] = await Promise.all([
+    const [status, mstp, deviceData, managedData, logData, frameData] = await Promise.all([
       api.getBacnetStatus(),
       api.getBacnetMstpStatus(),
       api.getDevices(),
+      api.getManagedDevices(),
       api.getBacnetMstpLogs(),
       api.getBacnetMstpFrames(),
     ]);
@@ -243,6 +245,9 @@ export default function BacnetPage() {
     setMstpStatus(mstp.status);
     setDevices(deviceData.devices || []);
     setLatestSessionId(deviceData.latestDiscoverySessionId || null);
+    setManagedKeys(new Set(
+      (managedData.devices || []).map((d) => `${d.transport}:${d.mstpMacAddress}:${d.deviceInstance}`),
+    ));
     setLogs(logData.logs || []);
     setFrames(frameData.frames || []);
     setIpForm({
@@ -464,6 +469,32 @@ export default function BacnetPage() {
       });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const managedKey = (device) => {
+    const mac = device.mstpMacAddress ?? device.macAddress;
+    const transport = device.transport === 'mstp' ? 'BACnet MS/TP' : device.transport;
+    return `${transport}:${mac}:${device.deviceInstance}`;
+  };
+
+  const handleAddManaged = async (device) => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      await api.addManagedDevice({ discoveredDeviceId: device.id });
+      await load();
+      setMessage({
+        type: 'success',
+        text: `MAC ${mstpMac(device)} (instance ${device.deviceInstance}) added to managed devices.`,
+      });
+    } catch (err) {
+      setMessage({
+        type: 'error',
+        text: err.code === 'ALREADY_MANAGED' ? 'Device is already managed.' : err.message,
+      });
     } finally {
       setLoading(false);
     }
@@ -779,13 +810,26 @@ export default function BacnetPage() {
                     <td>{mstpDevice ? (device.sightings ?? '—') : '—'}</td>
                     <td>{mstpDevice ? (device.missedScans ?? 0) : '—'}</td>
                     <td>
-                      <button
-                        type="button"
-                        className="btn btn-sentry-secondary btn-sm"
-                        onClick={() => navigate(`/devices/${device.id}`)}
-                      >
-                        Details
-                      </button>
+                      <div className="d-flex gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-sentry-secondary btn-sm"
+                          onClick={() => navigate(`/devices/${device.id}`)}
+                        >
+                          Details
+                        </button>
+                        {mstpDevice && (
+                          <button
+                            type="button"
+                            className="btn btn-sentry-primary btn-sm"
+                            onClick={() => handleAddManaged(device)}
+                            disabled={loading || managedKeys.has(managedKey(device))}
+                            title={managedKeys.has(managedKey(device)) ? 'Already managed' : 'Promote to managed devices'}
+                          >
+                            {managedKeys.has(managedKey(device)) ? 'Managed' : 'Add to Managed'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

@@ -96,7 +96,7 @@ function getBacnetStatus() {
       recommendedSerialPort: recommendedPort?.path || '/dev/serial0',
       discoveryImplemented: true,
       interface: mstpInterface,
-      discoveryNote: 'BACnet MS/TP discovery sends real Who-Is frames over RS485. Token participation is not implemented yet.',
+      discoveryNote: 'BACnet MS/TP discovery uses token-gated Who-Is when Token Mode is enabled. Routing between BACnet/IP and MS/TP is not implemented in DEV-1.',
     }),
     routing: {
       ...(settings.routing || {

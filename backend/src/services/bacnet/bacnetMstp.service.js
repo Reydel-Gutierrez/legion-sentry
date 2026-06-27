@@ -11,6 +11,7 @@ const {
   verifyHeaderCrc,
   verifyDataCrc,
 } = require('./mstpCrc');
+const { MstpTokenEngine } = require('./mstpTokenEngine');
 
 const MSTP_FRAME_TYPE = {
   TOKEN: 0x00,
@@ -33,7 +34,7 @@ const DEFAULT_WHO_IS_RETRIES = 5;
 const DEFAULT_RETRY_INTERVAL_MS = 3000;
 const DEFAULT_PRE_LISTEN_MS = 1000;
 const DEFAULT_POST_SEND_LISTEN_MS = 3000;
-const TOKEN_PARTICIPATION_IMPLEMENTED = false;
+const TOKEN_PARTICIPATION_IMPLEMENTED = true;
 // Directed (unicast) MS/TP Who-Is is not correctly supported yet: it requires
 // genuine token participation to address a specific master. We never fake it.
 const DIRECTED_WHO_IS_IMPLEMENTED = false;
@@ -264,6 +265,7 @@ function getStatusSnapshot() {
     openedAt: interfaceState.openedAt,
     discoveryInProgress: Boolean(activeDiscovery),
     lastDiscoverySessionId: lastSession?.discoverySessionId || null,
+    tokenEngine: activeDiscovery?.tokenEngine?.getSnapshot() || null,
   };
 }
 
@@ -918,6 +920,92 @@ function writeToPort(port, buffer) {
   });
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+let tokenEngineTxChain = Promise.resolve();
+
+function enqueueTokenEngineTx(task) {
+  tokenEngineTxChain = tokenEngineTxChain
+    .then(() => task())
+    .catch(() => {});
+  return tokenEngineTxChain;
+}
+
+/**
+ * Drain token-engine transmit opportunities (PFM reply, Who-Is, or pass-token).
+ */
+async function flushTokenEngineTx(tokenEngine, port, recordSessionLog) {
+  if (!tokenEngine || !port?.isOpen) return;
+
+  // Serialize all MS/TP transmits through one chain to avoid bus collisions.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const frame = tokenEngine.poll();
+    if (!frame) break;
+
+    await writeToPort(port, frame);
+    interfaceState.txBytes += frame.length;
+    interfaceState.lastActivityAt = new Date().toISOString();
+    tokenEngine.notifyTransmitted();
+
+    const frameType = frame[2];
+    if (frameType === MSTP_FRAME_TYPE.REPLY_TO_POLL_FOR_MASTER) {
+      recordSessionLog('info', 'Reply To Poll For Master transmitted', {
+        frameBytes: frame.length,
+      });
+    } else if (frameType === MSTP_FRAME_TYPE.TOKEN) {
+      recordSessionLog('info', `Token frame transmitted to MAC ${frame[3]}`, {
+        destinationMac: frame[3],
+        sourceMac: frame[4],
+        frameBytes: frame.length,
+      });
+    } else if (
+      frameType === MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY
+      || frameType === MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY
+    ) {
+      recordSessionLog('info', 'Token-gated Who-Is transmitted', {
+        frameBytes: frame.length,
+        macAddress: frame[4],
+      });
+    }
+  }
+}
+
+function scheduleTokenEngineWork(tokenEngine, port, recordSessionLog) {
+  if (!tokenEngine) return;
+  enqueueTokenEngineTx(() => flushTokenEngineTx(tokenEngine, port, recordSessionLog))
+    .catch((err) => {
+      recordSessionLog('warn', `Token engine transmit failed: ${err.message}`);
+    });
+}
+
+function createDiscoveryTokenEngine(config, recordSessionLog) {
+  return new MstpTokenEngine({
+    macAddress: config.macAddress,
+    maxMaster: config.maxMaster,
+    maxInfoFrames: config.maxInfoFrames,
+    baudRate: config.baudRate,
+    buildFrame: (frameType, destination, source, data) => buildMstpFrame(
+      frameType,
+      destination,
+      source,
+      data,
+    ),
+    onLog: (level, message, extra = {}) => {
+      recordSessionLog(level, message, extra);
+    },
+    onStateChange: (from, to, extra = {}) => {
+      recordSessionLog('info', `Token engine state transition: ${from} → ${to}`, {
+        previousState: from,
+        nextState: to,
+        ...extra,
+      });
+    },
+  });
+}
+
 async function discover(input = {}) {
   if (activeDiscovery) {
     const error = new Error('BACnet MS/TP discovery is already in progress');
@@ -966,6 +1054,10 @@ async function discover(input = {}) {
   let dataListener = null;
   let discoveryTimer = null;
   let retryTimer = null;
+  let engineTickTimer = null;
+  let whoIsQueueTimer = null;
+  let tokenEngine = null;
+  const useTokenMode = Boolean(config.tokenMode && TOKEN_PARTICIPATION_IMPLEMENTED);
 
   const recordSessionLog = (level, message, extra = {}) => {
     const enriched = { discoverySessionId, ...extra };
@@ -1002,6 +1094,12 @@ async function discover(input = {}) {
       throw new Error('MS/TP serial port is not open');
     }
 
+    if (useTokenMode) {
+      tokenEngine = createDiscoveryTokenEngine(config, recordSessionLog);
+      activeDiscovery.tokenEngine = tokenEngine;
+      recordSessionLog('info', `Token mode engaged — joining MS/TP ring as master MAC ${config.macAddress} (Who-Is only while holding token)`);
+    }
+
     dataListener = (chunk) => {
       try {
         interfaceState.rxBytes += chunk.length;
@@ -1015,6 +1113,26 @@ async function discover(input = {}) {
           // Record a raw diagnostic for every received frame, regardless of
           // whether it parsed into a device.
           recordFrameDiagnostic(frame, discoverySessionId);
+
+          if (tokenEngine) {
+            const pfmReply = tokenEngine.handleReceivedFrame(frame);
+            if (pfmReply) {
+              enqueueTokenEngineTx(async () => {
+                await delay(tokenEngine.tTurnaround);
+                await writeToPort(port, pfmReply);
+                interfaceState.txBytes += pfmReply.length;
+                interfaceState.lastActivityAt = new Date().toISOString();
+                tokenEngine.notifyTransmitted();
+                recordSessionLog('info', 'Reply To Poll For Master transmitted', {
+                  frameBytes: pfmReply.length,
+                  destinationMac: frame.source,
+                });
+              }).catch((err) => {
+                recordSessionLog('warn', `Poll For Master reply failed: ${err.message}`);
+              });
+            }
+            scheduleTokenEngineWork(tokenEngine, port, recordSessionLog);
+          }
 
           if (frame.iAm) {
             // Deduplicate by deviceInstance + MS/TP MAC. Update lastSeenAt for
@@ -1101,6 +1219,8 @@ async function discover(input = {}) {
       const tokenWarning = 'Token mode requested, but MS/TP token participation is not implemented yet. Falling back to send-only diagnostic discovery.';
       warnings.push(tokenWarning);
       recordSessionLog('warn', tokenWarning);
+    } else if (!useTokenMode && TOKEN_PARTICIPATION_IMPLEMENTED) {
+      recordSessionLog('warn', 'Send-only discovery — enable Token Mode for non-disruptive MS/TP bus participation');
     } else if (!TOKEN_PARTICIPATION_IMPLEMENTED) {
       recordSessionLog('warn', 'MS/TP token participation not implemented — frames are sent directly on the bus');
     }
@@ -1117,7 +1237,7 @@ async function discover(input = {}) {
     }
 
     if (config.extraDiscoveryRetriesEnabled) {
-      recordSessionLog('info', `Extended discovery retry enabled — using ${whoIsRetries} additional Who-Is broadcast attempts`);
+      recordSessionLog('info', `Extended discovery retry enabled — using ${whoIsRetries} Who-Is attempt(s)`);
     }
 
     let sends = 0;
@@ -1134,26 +1254,54 @@ async function discover(input = {}) {
       });
     };
 
-    // Optional pre-listen delay: capture bus traffic before transmitting.
+    const queueWhoIsForToken = () => {
+      if (!tokenEngine) return;
+      tokenEngine.queueWhoIsFrame(whoIsFrame);
+      sends += 1;
+      recordSessionLog('info', `Who-Is queued ${sends}/${whoIsRetries} for token-gated send`, {
+        macAddress: config.macAddress,
+        attempt: sends,
+        whoIsRetries,
+      });
+      scheduleTokenEngineWork(tokenEngine, port, recordSessionLog);
+    };
+
+    // Optional pre-listen delay: capture bus traffic before queueing/transmitting.
     if (preListenMs > 0) {
-      recordSessionLog('info', `Pre-listen delay ${preListenMs}ms before first Who-Is`);
-      await new Promise((resolve) => setTimeout(resolve, preListenMs));
+      recordSessionLog('info', `Pre-listen delay ${preListenMs}ms before Who-Is`);
+      await delay(preListenMs);
     }
 
-    // Active retry: send Who-Is up to `whoIsRetries` times, spaced
-    // `retryIntervalMs` apart, all within the discovery window.
-    await sendWhoIs();
-    if (whoIsRetries > 1) {
-      retryTimer = setInterval(() => {
-        if (sends >= whoIsRetries) {
-          clearInterval(retryTimer);
-          retryTimer = null;
-          return;
-        }
-        sendWhoIs().catch((err) => {
-          recordSessionLog('warn', `Who-Is retry failed: ${err.message}`);
-        });
-      }, retryIntervalMs);
+    if (useTokenMode) {
+      engineTickTimer = setInterval(() => {
+        scheduleTokenEngineWork(tokenEngine, port, recordSessionLog);
+      }, Math.max(1, Math.floor(tokenEngine.tSlot)));
+
+      queueWhoIsForToken();
+      if (whoIsRetries > 1) {
+        whoIsQueueTimer = setInterval(() => {
+          if (sends >= whoIsRetries) {
+            clearInterval(whoIsQueueTimer);
+            whoIsQueueTimer = null;
+            return;
+          }
+          queueWhoIsForToken();
+        }, retryIntervalMs);
+      }
+    } else {
+      await sendWhoIs();
+      if (whoIsRetries > 1) {
+        retryTimer = setInterval(() => {
+          if (sends >= whoIsRetries) {
+            clearInterval(retryTimer);
+            retryTimer = null;
+            return;
+          }
+          sendWhoIs().catch((err) => {
+            recordSessionLog('warn', `Who-Is retry failed: ${err.message}`);
+          });
+        }, retryIntervalMs);
+      }
     }
 
     await new Promise((resolve) => {
@@ -1163,6 +1311,14 @@ async function discover(input = {}) {
     if (retryTimer) {
       clearInterval(retryTimer);
       retryTimer = null;
+    }
+    if (whoIsQueueTimer) {
+      clearInterval(whoIsQueueTimer);
+      whoIsQueueTimer = null;
+    }
+    if (engineTickTimer) {
+      clearInterval(engineTickTimer);
+      engineTickTimer = null;
     }
 
     const devices = Array.from(seen.values());
@@ -1176,6 +1332,11 @@ async function discover(input = {}) {
       recordSessionLog('info', 'Discovery timeout — no MS/TP I-Am responses received');
     } else {
       recordSessionLog('info', `Discovery complete — ${devices.length} device(s) found in ${durationMs}ms`);
+    }
+
+    if (tokenEngine) {
+      const snapshot = tokenEngine.getSnapshot();
+      recordSessionLog('info', 'Token engine session summary', snapshot.stats);
     }
 
     return {
@@ -1196,6 +1357,7 @@ async function discover(input = {}) {
       preListenMs,
       postSendListenMs,
       whoIsRetries,
+      tokenEngine: tokenEngine?.getSnapshot() || null,
       message: devices.length === 0 ? 'No MS/TP responses received.' : undefined,
       status: getStatusSnapshot(),
     };
@@ -1227,6 +1389,12 @@ async function discover(input = {}) {
     }
     if (retryTimer) {
       clearInterval(retryTimer);
+    }
+    if (whoIsQueueTimer) {
+      clearInterval(whoIsQueueTimer);
+    }
+    if (engineTickTimer) {
+      clearInterval(engineTickTimer);
     }
 
     const port = interfaceState.serialPort;
@@ -1262,4 +1430,5 @@ module.exports = {
   buildMstpFrame,
   parseMstpFrames,
   parseIAmApdu,
+  MstpTokenEngine: require('./mstpTokenEngine').MstpTokenEngine,
 };

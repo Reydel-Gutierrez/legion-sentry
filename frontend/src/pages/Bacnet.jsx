@@ -89,6 +89,10 @@ function validateMstpForm(form, { frames = [], devices = [] } = {}) {
     errors.push('Retry interval must be between 250 ms and less than timeout.');
   }
 
+  if (!form.tokenMode) {
+    warnings.push('Token Mode is off — discovery will broadcast Who-Is without holding the MS/TP token (disruptive). Enable Token Mode for safe bus participation.');
+  }
+
   if (mac === 0) {
     warnings.push('MAC Address 0 is typically reserved — confirm before proceeding.');
   }
@@ -610,7 +614,7 @@ export default function BacnetPage() {
               <Form.Check
                 type="checkbox"
                 id="mstp-token-mode"
-                label="Token Mode (not implemented — send-only discovery used)"
+                label="Token Mode (join MS/TP ring — Who-Is only while holding token)"
                 checked={Boolean(mstpForm.tokenMode)}
                 onChange={(e) => updateMstp('tokenMode', e.target.checked)}
               />
@@ -682,8 +686,14 @@ export default function BacnetPage() {
             <KvRow label="Token Mode" value={mstp.tokenMode ? 'Enabled' : 'Disabled'} />
             <KvRow
               label="Token Participation"
-              value={mstp.tokenParticipationImplemented ? 'Implemented' : 'Not implemented'}
+              value={mstp.tokenParticipationImplemented ? 'Milestone 1 (discovery)' : 'Not implemented'}
             />
+            {mstp.tokenEngine ? (
+              <KvRow
+                label="Token Engine"
+                value={`${mstp.tokenEngine.state}${mstp.tokenEngine.holdingToken ? ' (holding)' : ''}`}
+              />
+            ) : null}
             <KvRow label="Last Activity" value={formatTime(mstp.lastActivityAt)} />
             <KvRow label="Last Error" value={mstp.lastError || '—'} />
             <div className="action-bar mt-3">

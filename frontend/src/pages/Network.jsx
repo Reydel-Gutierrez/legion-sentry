@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { Col, Form, Row } from 'react-bootstrap';
 import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
-import PanelCard from '../components/common/PanelCard';
-import StatusBadge from '../components/common/StatusBadge';
+import SectionCard from '../components/common/SectionCard';
+import StatusChip from '../components/common/StatusChip';
+import PageHeader from '../components/common/PageHeader';
+import ActionButton from '../components/common/ActionButton';
 import LoadingState from '../components/common/LoadingState';
 
 const EMPTY_IFACE_CONFIG = {
@@ -42,130 +44,83 @@ function InterfaceConfigCard({
 }) {
   const isDhcp = config.mode === 'dhcp';
   const unavailable = Boolean(unavailableMessage);
+  const fieldsDisabled = loading || isDhcp;
 
   return (
-    <PanelCard title={title} className="mb-3">
+    <SectionCard
+      title={title}
+      className="mb-3"
+      status={(
+        <StatusChip
+          label={iface?.operstate || iface?.status || 'unknown'}
+        />
+      )}
+    >
       <KvRow label="Interface" value={ifaceName} />
-      <KvRow
-        label="Status"
-        value={(
-          <>
-            <StatusBadge status={iface?.status || 'down'} label={iface?.operstate || iface?.status || 'unknown'} />
-            {iface?.ipv4 && <span className="mono ms-2">{iface.ipv4}</span>}
-          </>
-        )}
-      />
+      <KvRow label="Address" value={iface?.ipv4 ? <span className="mono">{iface.ipv4}</span> : '—'} />
       {ifaceName === 'wlan0' && iface?.connection && (
         <KvRow label="Active connection" value={iface.connection} />
-      )}
-      {ifaceName === 'wlan0' && iface?.ipv4 && (
-        <KvRow label="Current IP" value={iface.ipv4} />
       )}
 
       {unavailable ? (
         <p className="text-muted mb-0 mt-2">{unavailableMessage}</p>
       ) : (
         <>
-          <div className="interface-config-form mt-3">
-            <Form.Check
-              type="radio"
-              id={`${ifaceName}-dhcp`}
-              name={`${ifaceName}-mode`}
-              label="DHCP"
-              checked={isDhcp}
-              disabled={loading}
-              onChange={() => onChange({ mode: 'dhcp' })}
-              className="mb-1"
-            />
-            <Form.Check
-              type="radio"
-              id={`${ifaceName}-static`}
-              name={`${ifaceName}-mode`}
-              label="Static IP"
-              checked={!isDhcp}
-              disabled={loading}
-              onChange={() => onChange({ mode: 'static' })}
-              className="mb-3"
-            />
-            <Row>
-              <Col sm={6}>
-                <Form.Group className="mb-2">
-                  <Form.Label>IP Address</Form.Label>
-                  <Form.Control
-                    value={config.ipAddress}
-                    disabled={loading || isDhcp}
-                    onChange={(e) => onChange({ ipAddress: e.target.value })}
-                    placeholder="192.168.1.48"
-                  />
-                </Form.Group>
-              </Col>
-              <Col sm={6}>
-                <Form.Group className="mb-2">
-                  <Form.Label>CIDR</Form.Label>
-                  <Form.Control
-                    value={config.cidr}
-                    disabled={loading || isDhcp}
-                    onChange={(e) => onChange({ cidr: e.target.value })}
-                    placeholder="24"
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-            <Row>
-              <Col sm={6}>
-                <Form.Group className="mb-2">
-                  <Form.Label>Gateway</Form.Label>
-                  <Form.Control
-                    value={config.gateway}
-                    disabled={loading || isDhcp}
-                    onChange={(e) => onChange({ gateway: e.target.value })}
-                    placeholder="192.168.1.1"
-                  />
-                </Form.Group>
-              </Col>
-              <Col sm={6}>
-                <Form.Group className="mb-2">
-                  <Form.Label>DNS 1</Form.Label>
-                  <Form.Control
-                    value={config.dns1}
-                    disabled={loading || isDhcp}
-                    onChange={(e) => onChange({ dns1: e.target.value })}
-                    placeholder="192.168.1.1"
-                  />
-                </Form.Group>
-              </Col>
-            </Row>
-            <Form.Group className="mb-2">
-              <Form.Label>DNS 2</Form.Label>
-              <Form.Control
-                value={config.dns2}
-                disabled={loading || isDhcp}
-                onChange={(e) => onChange({ dns2: e.target.value })}
-                placeholder="8.8.8.8"
+          <div className="form-section mt-3">
+            <div className="d-flex gap-3 mb-3">
+              <Form.Check
+                type="radio"
+                id={`${ifaceName}-dhcp`}
+                name={`${ifaceName}-mode`}
+                label="DHCP"
+                checked={isDhcp}
+                disabled={loading}
+                onChange={() => onChange({ mode: 'dhcp' })}
               />
-            </Form.Group>
+              <Form.Check
+                type="radio"
+                id={`${ifaceName}-static`}
+                name={`${ifaceName}-mode`}
+                label="Static IP"
+                checked={!isDhcp}
+                disabled={loading}
+                onChange={() => onChange({ mode: 'static' })}
+              />
+            </div>
+            <div className="form-grid form-grid--2">
+              <div className="field-group">
+                <label className="form-label">IP Address</label>
+                <input className="form-control" value={config.ipAddress} disabled={fieldsDisabled} onChange={(e) => onChange({ ipAddress: e.target.value })} placeholder="192.168.1.48" />
+              </div>
+              <div className="field-group">
+                <label className="form-label">CIDR</label>
+                <input className="form-control" value={config.cidr} disabled={fieldsDisabled} onChange={(e) => onChange({ cidr: e.target.value })} placeholder="24" />
+              </div>
+              <div className="field-group">
+                <label className="form-label">Gateway</label>
+                <input className="form-control" value={config.gateway} disabled={fieldsDisabled} onChange={(e) => onChange({ gateway: e.target.value })} placeholder="192.168.1.1" />
+              </div>
+              <div className="field-group">
+                <label className="form-label">DNS 1</label>
+                <input className="form-control" value={config.dns1} disabled={fieldsDisabled} onChange={(e) => onChange({ dns1: e.target.value })} placeholder="192.168.1.1" />
+              </div>
+              <div className="field-group">
+                <label className="form-label">DNS 2</label>
+                <input className="form-control" value={config.dns2} disabled={fieldsDisabled} onChange={(e) => onChange({ dns2: e.target.value })} placeholder="8.8.8.8" />
+              </div>
+            </div>
           </div>
-          <div className="action-bar mt-2">
-            <button
-              type="button"
-              className="btn btn-sentry-primary btn-sm"
-              onClick={onApply}
-              disabled={loading}
-            >
+          <div className="action-bar mt-3">
+            <ActionButton variant="primary" size="sm" onClick={onApply} disabled={loading}>
               {ifaceName === 'eth0' ? 'Apply Ethernet Settings' : 'Apply WiFi Settings'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sentry-secondary btn-sm"
-              onClick={onRestoreDhcp}
-              disabled={loading}
-            >
+            </ActionButton>
+            <ActionButton size="sm" onClick={onRestoreDhcp} disabled={loading}>
               Restore DHCP
-            </button>
+            </ActionButton>
           </div>
         </>
       )}
-    </PanelCard>
+    </SectionCard>
   );
 }
 
@@ -340,18 +295,28 @@ export default function NetworkPage() {
 
   return (
     <>
+      <PageHeader
+        title="Network"
+        subtitle="Interface status, addressing, hostname and network tools."
+        actions={(
+          <ActionButton size="sm" onClick={handleRefreshInterfaces} disabled={loading}>
+            Refresh Interfaces
+          </ActionButton>
+        )}
+      />
+
       {message && (
         <div className={`alert-sentry alert-sentry-${message.type === 'success' ? 'success' : message.type === 'info' ? 'info' : 'error'} mb-3`}>
           {message.text}
         </div>
       )}
 
-      <PanelCard title="Interface Status" className="mb-3">
+      <SectionCard title="Interface Status" className="mb-3">
         <KvRow
           label="eth0"
           value={(
             <>
-              <StatusBadge status={eth0?.status || 'down'} label={eth0?.operstate || eth0?.status || 'unavailable'} />
+              <StatusChip label={eth0?.operstate || eth0?.status || 'unavailable'} />
               {eth0?.ipv4 && <span className="mono ms-2">{eth0.ipv4}</span>}
             </>
           )}
@@ -361,7 +326,7 @@ export default function NetworkPage() {
           label="wlan0"
           value={(
             <>
-              <StatusBadge status={wlan0?.status || 'down'} label={wlan0?.operstate || wlan0?.status || 'unknown'} />
+              <StatusChip label={wlan0?.operstate || wlan0?.status || 'unknown'} />
               {wlan0?.ipv4 && <span className="mono ms-2">{wlan0.ipv4}</span>}
             </>
           )}
@@ -371,13 +336,12 @@ export default function NetworkPage() {
         <KvRow label="Manager" value={managerName} />
         <KvRow label="Active connection" value={wlanConnection || eth0?.connection || '—'} />
         <KvRow label="Hostname" value={data.hostname || data.live?.hostname} />
-        <KvRow label="Primary IP" value={data.currentIp || '—'} />
-      </PanelCard>
+      </SectionCard>
 
       <Row>
         <Col lg={6}>
           <InterfaceConfigCard
-            title="Ethernet Configuration"
+            title="Ethernet"
             ifaceName="eth0"
             iface={eth0}
             config={eth0Config}
@@ -390,7 +354,7 @@ export default function NetworkPage() {
         </Col>
         <Col lg={6}>
           <InterfaceConfigCard
-            title="WiFi Configuration"
+            title="WiFi"
             ifaceName="wlan0"
             iface={{ ...wlan0, connection: wlanConnection }}
             config={wlan0Config}
@@ -402,44 +366,41 @@ export default function NetworkPage() {
         </Col>
       </Row>
 
-      <PanelCard title="Hostname" className="mb-3">
+      <SectionCard title="Hostname" className="mb-3">
         <KvRow label="Current hostname" value={data.hostname || data.live?.hostname} />
-        <Form.Group className="mb-3 mt-2">
-          <Form.Label>Hostname</Form.Label>
-          <Form.Control
+        <div className="field-group mt-3" style={{ maxWidth: '320px' }}>
+          <label className="form-label">Hostname</label>
+          <input
+            className="form-control"
             value={hostnameInput}
             disabled={loading}
             onChange={(e) => setHostnameInput(e.target.value)}
             placeholder="sentry-dev-1"
           />
-        </Form.Group>
-        <p className="text-muted small mb-2">Hostname change may require reconnect or reboot.</p>
-        <button type="button" className="btn btn-sentry-primary btn-sm" onClick={handleSaveHostname} disabled={loading}>
-          Save Hostname
-        </button>
-      </PanelCard>
+        </div>
+        <div className="action-bar mt-3">
+          <ActionButton variant="primary" size="sm" onClick={handleSaveHostname} disabled={loading}>
+            Save Hostname
+          </ActionButton>
+        </div>
+      </SectionCard>
 
-      <PanelCard title="Network Tools" className="mb-3">
+      <SectionCard title="Network Tools" className="mb-3">
         <div className="action-bar">
-          <button type="button" className="btn btn-sentry-secondary btn-sm" onClick={handleTestGateway} disabled={loading}>
+          <ActionButton size="sm" onClick={handleTestGateway} disabled={loading}>
             Test Gateway Ping
-          </button>
-          <button type="button" className="btn btn-sentry-secondary btn-sm" onClick={handleTestDns} disabled={loading}>
+          </ActionButton>
+          <ActionButton size="sm" onClick={handleTestDns} disabled={loading}>
             Test DNS
-          </button>
-          <button type="button" className="btn btn-sentry-secondary btn-sm" onClick={handleRefreshInterfaces} disabled={loading}>
+          </ActionButton>
+          <ActionButton size="sm" onClick={handleRefreshInterfaces} disabled={loading}>
             Refresh Interfaces
-          </button>
-        </div>
-      </PanelCard>
-
-      <PanelCard title="Network Actions">
-        <div className="action-bar">
-          <button type="button" className="btn btn-sentry-danger btn-sm" onClick={handleReboot} disabled={loading}>
+          </ActionButton>
+          <ActionButton variant="danger" size="sm" onClick={handleReboot} disabled={loading}>
             Reboot Device
-          </button>
+          </ActionButton>
         </div>
-      </PanelCard>
+      </SectionCard>
     </>
   );
 }

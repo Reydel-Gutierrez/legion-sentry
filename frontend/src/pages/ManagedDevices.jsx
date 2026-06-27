@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Table } from 'react-bootstrap';
 import { api } from '../api/client';
-import PanelCard from '../components/common/PanelCard';
+import SectionCard from '../components/common/SectionCard';
+import PageHeader from '../components/common/PageHeader';
+import StatusChip from '../components/common/StatusChip';
+import ActionButton from '../components/common/ActionButton';
+import DataTable from '../components/common/DataTable';
 
 function formatLastSeen(iso) {
   if (!iso) return '—';
@@ -13,28 +16,18 @@ function formatLastSeen(iso) {
 }
 
 const MSTP_STATUS_META = {
-  seen_latest_scan: { variant: 'running', label: 'Seen latest scan' },
-  recently_seen: { variant: 'warn', label: 'Recently seen' },
-  stale: { variant: 'stopped', label: 'Not rediscovered' },
-  never_confirmed: { variant: 'stopped', label: 'Unknown' },
+  seen_latest_scan: { tone: 'success', label: 'Seen latest scan' },
+  recently_seen: { tone: 'warn', label: 'Recently seen' },
+  stale: { tone: 'neutral', label: 'Not rediscovered' },
+  never_confirmed: { tone: 'neutral', label: 'Unknown' },
 };
 
-function mstpStatusBadge(device) {
+function mstpStatusChip(device) {
   const meta = MSTP_STATUS_META[device.mstpStatus] || MSTP_STATUS_META.never_confirmed;
   const title = device.mstpStatus === 'stale'
     ? 'Managed device was not seen in the latest Who-Is scan.'
     : undefined;
-  return (
-    <span className={`status-badge badge-${meta.variant}`} title={title}>
-      {meta.label}
-    </span>
-  );
-}
-
-function enabledBadge(enabled) {
-  return enabled
-    ? <span className="status-badge badge-running">Enabled</span>
-    : <span className="status-badge badge-stopped">Disabled</span>;
+  return <StatusChip tone={meta.tone} label={meta.label} title={title} />;
 }
 
 function formatPresentValue(value) {
@@ -51,80 +44,46 @@ function PointsPanel({
   onClear,
   onClose,
 }) {
+  const pointColumns = [
+    { key: 'objectType', header: 'Object Type', render: (p) => p.objectTypeLabel || p.objectType },
+    { key: 'objectInstance', header: 'Instance', cellClassName: 'mono' },
+    { key: 'objectName', header: 'Object Name', render: (p) => p.objectName || '—' },
+    { key: 'presentValue', header: 'Present Value', cellClassName: 'mono', render: (p) => formatPresentValue(p.presentValue) },
+    { key: 'units', header: 'Units', render: (p) => p.units ?? '—' },
+    { key: 'reliability', header: 'Reliability', render: (p) => p.reliability ?? '—' },
+    { key: 'status', header: 'Status', render: (p) => p.status || '—' },
+    { key: 'lastReadAt', header: 'Last Read', render: (p) => formatLastSeen(p.lastReadAt) },
+  ];
+
   return (
-    <div className="mt-3 pt-3" style={{ borderTop: '1px solid #e3e8ef' }}>
-      <div className="d-flex justify-content-between align-items-center mb-2">
-        <h6 style={{ margin: 0 }}>
-          Points for MAC {device.mstpMacAddress} (instance {device.deviceInstance})
-        </h6>
-        <div className="d-flex gap-2">
-          <button
-            type="button"
-            className="btn btn-sentry-primary btn-sm"
-            onClick={onDiscover}
-            disabled={loading || !device.enabled}
-          >
+    <SectionCard
+      title={`Points — MAC ${device.mstpMacAddress} (instance ${device.deviceInstance})`}
+      className="mt-3"
+      actions={(
+        <>
+          <ActionButton variant="primary" size="sm" onClick={onDiscover} disabled={loading || !device.enabled}>
             Discover Points
-          </button>
-          <button
-            type="button"
-            className="btn btn-sentry-secondary btn-sm"
-            onClick={onClear}
-            disabled={loading || points.length === 0}
-          >
+          </ActionButton>
+          <ActionButton size="sm" onClick={onClear} disabled={loading || points.length === 0}>
             Clear Points
-          </button>
-          <button
-            type="button"
-            className="btn btn-sentry-secondary btn-sm"
-            onClick={onClose}
-          >
+          </ActionButton>
+          <ActionButton size="sm" onClick={onClose}>
             Close
-          </button>
-        </div>
-      </div>
-      {!device.enabled && (
-        <p style={{ color: '#58677d', marginBottom: '0.75rem' }}>
-          Enable this managed device before discovering points.
-        </p>
+          </ActionButton>
+        </>
       )}
-      <Table responsive className="sentry-table mb-0">
-        <thead>
-          <tr>
-            <th>Object Type</th>
-            <th>Instance</th>
-            <th>Object Name</th>
-            <th>Present Value</th>
-            <th>Units</th>
-            <th>Reliability</th>
-            <th>Status</th>
-            <th>Last Read</th>
-          </tr>
-        </thead>
-        <tbody>
-          {points.length === 0 ? (
-            <tr>
-              <td colSpan={8} style={{ textAlign: 'center', color: '#58677d' }}>
-                No points discovered yet.
-              </td>
-            </tr>
-          ) : (
-            points.map((point) => (
-              <tr key={point.id}>
-                <td>{point.objectTypeLabel || point.objectType}</td>
-                <td className="mono">{point.objectInstance}</td>
-                <td>{point.objectName || '—'}</td>
-                <td className="mono">{formatPresentValue(point.presentValue)}</td>
-                <td>{point.units ?? '—'}</td>
-                <td>{point.reliability ?? '—'}</td>
-                <td>{point.status || '—'}</td>
-                <td>{formatLastSeen(point.lastReadAt)}</td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </Table>
-    </div>
+    >
+      {!device.enabled && (
+        <p className="text-muted mb-3">Enable this managed device before discovering points.</p>
+      )}
+      <DataTable
+        columns={pointColumns}
+        rows={points}
+        rowKey={(p) => p.id}
+        pageSize={10}
+        emptyMessage="No points discovered yet."
+      />
+    </SectionCard>
   );
 }
 
@@ -247,115 +206,95 @@ export default function ManagedDevicesPage() {
 
   const viewingDevice = devices.find((d) => d.id === viewingDeviceId) || null;
 
+  const enabledCount = devices.filter((d) => d.enabled).length;
+  const lastScan = devices.reduce((latest, d) => {
+    const t = d.lastSeenAt ? new Date(d.lastSeenAt).getTime() : 0;
+    return t > latest ? t : latest;
+  }, 0);
+
+  const summary = [
+    { label: 'Total', value: devices.length },
+    { label: 'Enabled', value: enabledCount, variant: 'success' },
+    { label: 'Disabled', value: devices.length - enabledCount },
+    { label: 'Last Scan', value: lastScan ? formatLastSeen(new Date(lastScan).toISOString()) : '—' },
+  ];
+
+  const columns = [
+    { key: 'rediscovery', header: 'Rediscovery', render: (d) => mstpStatusChip(d) },
+    {
+      key: 'enabled',
+      header: 'Enabled',
+      render: (d) => <StatusChip tone={d.enabled ? 'success' : 'neutral'} label={d.enabled ? 'Enabled' : 'Disabled'} />,
+    },
+    { key: 'network', header: 'Network', render: (d) => d.configuredNetworkNumber ?? '—' },
+    { key: 'mac', header: 'MS/TP MAC', cellClassName: 'mono', render: (d) => d.mstpMacAddress },
+    { key: 'deviceInstance', header: 'Instance' },
+    { key: 'objectName', header: 'Object Name', render: (d) => d.objectName || '—' },
+    { key: 'vendor', header: 'Vendor', render: (d) => d.vendor || '—' },
+    { key: 'lastSeen', header: 'Last Seen', render: (d) => formatLastSeen(d.lastSeenAt) },
+    { key: 'missed', header: 'Missed', render: (d) => d.missedScans ?? 0 },
+    {
+      key: 'actions',
+      header: '',
+      align: 'right',
+      render: (device) => (
+        <div className="d-flex flex-wrap gap-2 justify-content-end">
+          <ActionButton
+            size="sm"
+            onClick={() => handleDiscoverPoints(device)}
+            disabled={loading || !device.enabled}
+            title={device.enabled ? 'Read objectList and point properties via MS/TP' : 'Enable device first'}
+          >
+            Discover Points
+          </ActionButton>
+          <ActionButton size="sm" onClick={() => handleViewPoints(device)} disabled={loading}>
+            {viewingDeviceId === device.id ? 'Hide Points' : 'View Points'}
+          </ActionButton>
+          <ActionButton size="sm" onClick={() => handleToggleEnabled(device)} disabled={loading}>
+            {device.enabled ? 'Disable' : 'Enable'}
+          </ActionButton>
+          <ActionButton variant="danger" size="sm" onClick={() => handleUnmanage(device)} disabled={loading}>
+            Unmanage
+          </ActionButton>
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
+      <PageHeader
+        title="Managed MS/TP Devices"
+        subtitle="Persistent field devices promoted from discovery."
+        summary={summary}
+      />
+
       {message && (
         <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : 'success'} mb-3`}>
           {message.text}
         </div>
       )}
 
-      <PanelCard title="Managed MS/TP Devices">
-        <p style={{ color: '#58677d', marginTop: 0, marginBottom: '0.75rem' }}>
-          Devices promoted from discovery for persistent field execution. Discover BACnet
-          objects/points through MS/TP for enabled managed devices.
-        </p>
-        <Table responsive className="sentry-table mb-0">
-          <thead>
-            <tr>
-              <th>Rediscovery</th>
-              <th>Enabled</th>
-              <th>Transport</th>
-              <th>Network</th>
-              <th>MS/TP MAC</th>
-              <th>Device Instance</th>
-              <th>Object Name</th>
-              <th>Vendor</th>
-              <th>Model</th>
-              <th>First Seen</th>
-              <th>Last Seen</th>
-              <th>Managed At</th>
-              <th>Missed Scans</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {devices.length === 0 ? (
-              <tr>
-                <td colSpan={14} style={{ textAlign: 'center', color: '#58677d' }}>
-                  No managed devices yet. Promote MS/TP devices from BACnet discovery.
-                </td>
-              </tr>
-            ) : (
-              devices.map((device) => (
-                <tr key={device.id}>
-                  <td>{mstpStatusBadge(device)}</td>
-                  <td>{enabledBadge(device.enabled)}</td>
-                  <td>{device.transport}</td>
-                  <td>{device.configuredNetworkNumber ?? '—'}</td>
-                  <td className="mono">{device.mstpMacAddress}</td>
-                  <td>{device.deviceInstance}</td>
-                  <td>{device.objectName || '—'}</td>
-                  <td>{device.vendor || '—'}</td>
-                  <td>{device.model || '—'}</td>
-                  <td>{formatLastSeen(device.firstSeenAt)}</td>
-                  <td>{formatLastSeen(device.lastSeenAt)}</td>
-                  <td>{formatLastSeen(device.managedAt)}</td>
-                  <td>{device.missedScans ?? 0}</td>
-                  <td>
-                    <div className="d-flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="btn btn-sentry-primary btn-sm"
-                        onClick={() => handleDiscoverPoints(device)}
-                        disabled={loading || !device.enabled}
-                        title={device.enabled ? 'Read objectList and point properties via MS/TP' : 'Enable device first'}
-                      >
-                        Discover Points
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sentry-secondary btn-sm"
-                        onClick={() => handleViewPoints(device)}
-                        disabled={loading}
-                      >
-                        {viewingDeviceId === device.id ? 'Hide Points' : 'View Points'}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sentry-secondary btn-sm"
-                        onClick={() => handleToggleEnabled(device)}
-                        disabled={loading}
-                      >
-                        {device.enabled ? 'Disable' : 'Enable'}
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-sentry-danger btn-sm"
-                        onClick={() => handleUnmanage(device)}
-                        disabled={loading}
-                      >
-                        Unmanage
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </Table>
+      <SectionCard title="Managed Devices">
+        <DataTable
+          columns={columns}
+          rows={devices}
+          rowKey={(d) => d.id}
+          pageSize={10}
+          emptyMessage="No managed devices yet. Promote MS/TP devices from BACnet discovery."
+        />
+      </SectionCard>
 
-        {viewingDevice && (
-          <PointsPanel
-            device={viewingDevice}
-            points={pointsByDevice[viewingDevice.id] || []}
-            loading={loading}
-            onDiscover={() => handleDiscoverPoints(viewingDevice)}
-            onClear={() => handleClearPoints(viewingDevice)}
-            onClose={() => setViewingDeviceId(null)}
-          />
-        )}
-      </PanelCard>
+      {viewingDevice && (
+        <PointsPanel
+          device={viewingDevice}
+          points={pointsByDevice[viewingDevice.id] || []}
+          loading={loading}
+          onDiscover={() => handleDiscoverPoints(viewingDevice)}
+          onClear={() => handleClearPoints(viewingDevice)}
+          onClose={() => setViewingDeviceId(null)}
+        />
+      )}
     </>
   );
 }

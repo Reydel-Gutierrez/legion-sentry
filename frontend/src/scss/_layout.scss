@@ -15,14 +15,15 @@ body {
 }
 
 #root {
-  min-height: 100vh;
+  height: 100vh;
 }
 
 // ─── Shell ───────────────────────────────────────────────────────────────────
 
 .app-shell {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
   background: $bg-base;
 }
 
@@ -31,6 +32,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: linear-gradient(180deg, $bg-base 0%, darken($bg-base, 1%) 100%);
 }
 
@@ -299,6 +301,7 @@ body {
 
 .app-content {
   flex: 1;
+  min-height: 0;
   padding: 1.35rem 1.5rem 1.5rem;
   overflow-y: auto;
 }
@@ -607,14 +610,22 @@ body {
   }
 }
 
+// Dangerous actions stay subtle until hover, then read clearly red.
 .btn-sentry-danger {
-  background: $danger-glow;
-  border: 1px solid rgba($danger, 0.4);
-  color: $danger;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid $panel-border-strong;
+  color: $text-secondary;
   font-size: 0.78rem;
   font-weight: 500;
   padding: 0.45rem 1rem;
   border-radius: $radius-sm;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+
+  &:hover:not(:disabled) {
+    background: $danger-glow;
+    border-color: rgba($danger, 0.45);
+    color: $danger;
+  }
 
   &:disabled {
     opacity: 0.35;
@@ -1030,4 +1041,468 @@ body {
 
 .mono {
   font-family: $font-mono;
+}
+
+// ─── Text alignment helpers ────────────────────────────────────────────────────
+
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+.text-center { text-align: center; }
+
+// ─── Page header ───────────────────────────────────────────────────────────────
+
+.page-header {
+  margin-bottom: 1.1rem;
+}
+
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.page-header-titles {
+  min-width: 0;
+}
+
+.page-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: $text-white;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.page-subtitle {
+  font-size: 0.8rem;
+  color: $text-muted;
+  margin: 0.2rem 0 0;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+// ─── Summary cards ──────────────────────────────────────────────────────────────
+
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.summary-card {
+  background: $panel;
+  border: 1px solid $panel-border;
+  border-radius: $radius-md;
+  padding: 0.7rem 0.9rem;
+
+  .summary-card-label {
+    display: block;
+    font-size: 0.62rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: $text-faint;
+    margin-bottom: 0.3rem;
+  }
+
+  .summary-card-value {
+    font-size: 1.3rem;
+    font-weight: 600;
+    font-family: $font-mono;
+    color: $text-white;
+    line-height: 1.1;
+  }
+
+  &--success .summary-card-value { color: $success; }
+  &--danger .summary-card-value { color: $danger; }
+  &--accent .summary-card-value { color: $accent; }
+}
+
+// ─── Section card ───────────────────────────────────────────────────────────────
+
+.section-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: rgba($bg-elevated, 0.65);
+  border-bottom: 1px solid $panel-border;
+  padding: 0.6rem 1rem;
+}
+
+.section-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.section-card-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: $text-muted;
+}
+
+.section-card-status {
+  display: inline-flex;
+  align-items: center;
+}
+
+.section-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+// ─── Status chips ──────────────────────────────────────────────────────────────
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.14rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border: 1px solid transparent;
+
+  .status-chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    flex-shrink: 0;
+  }
+
+  &--success {
+    background: $success-glow;
+    color: $success;
+    border-color: rgba($success, 0.32);
+  }
+
+  &--neutral {
+    background: rgba(255, 255, 255, 0.04);
+    color: $text-muted;
+    border-color: $panel-border;
+  }
+
+  &--warn {
+    background: $accent-glow;
+    color: $accent;
+    border-color: $accent-border;
+  }
+
+  &--danger {
+    background: $danger-glow;
+    color: $danger;
+    border-color: rgba($danger, 0.32);
+  }
+}
+
+// ─── Data table ─────────────────────────────────────────────────────────────────
+
+.data-table-wrap {
+  overflow-x: auto;
+}
+
+.data-table .sentry-table {
+  td,
+  th {
+    height: 40px;
+    white-space: nowrap;
+  }
+}
+
+.data-table-empty {
+  text-align: center;
+  color: $text-muted;
+  padding: 2rem 1rem !important;
+  font-size: 0.82rem;
+}
+
+.data-table-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.65rem 0.25rem 0;
+  margin-top: 0.5rem;
+  border-top: 1px solid $panel-border;
+}
+
+.data-table-rangeinfo {
+  font-size: 0.72rem;
+  color: $text-muted;
+  font-family: $font-mono;
+}
+
+.data-table-pages {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.data-table-page-btn {
+  min-width: 28px;
+  padding: 0.25rem 0.5rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid $panel-border;
+  border-radius: $radius-sm;
+  color: $text-muted;
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+
+  &:hover:not(:disabled):not(.active) {
+    border-color: rgba(255, 255, 255, 0.18);
+    color: $text-secondary;
+  }
+
+  &.active {
+    border-color: $accent-border;
+    color: $accent;
+    background: $accent-glow;
+  }
+
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+}
+
+.data-table-row-clickable {
+  cursor: pointer;
+
+  &:hover td {
+    background: rgba($accent, 0.04);
+    color: $text-white;
+  }
+}
+
+// ─── Form sections & grids ──────────────────────────────────────────────────────
+
+.form-section {
+  & + .form-section {
+    margin-top: 1.1rem;
+    padding-top: 1.1rem;
+    border-top: 1px solid $panel-border;
+  }
+}
+
+.form-section-title {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: $text-faint;
+  margin-bottom: 0.7rem;
+}
+
+.form-grid {
+  display: grid;
+  gap: 0.75rem 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+
+  &--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  &--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  .form-group {
+    margin-bottom: 0;
+  }
+
+  @media (max-width: 640px) {
+    &--2,
+    &--3 { grid-template-columns: 1fr; }
+  }
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+
+  .form-label {
+    margin-bottom: 0.3rem;
+  }
+}
+
+// Read-only status readout block, visually separate from editable config.
+.status-readout {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid $panel-border;
+  border-radius: $radius-sm;
+  padding: 0.4rem 0.85rem;
+}
+
+// ─── Collapsible section ────────────────────────────────────────────────────────
+
+.collapsible-section {
+  border: 1px solid $panel-border;
+  border-radius: $radius-sm;
+  background: rgba(255, 255, 255, 0.015);
+  overflow: hidden;
+}
+
+.collapsible-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.6rem 0.85rem;
+  background: transparent;
+  border: none;
+  color: $text-secondary;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  cursor: pointer;
+  text-align: left;
+
+  &:hover {
+    color: $text-white;
+  }
+}
+
+.collapsible-caret {
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 0.15s;
+  flex-shrink: 0;
+
+  .collapsible-section.open & {
+    transform: rotate(90deg);
+  }
+}
+
+.collapsible-body {
+  padding: 0.25rem 0.85rem 0.85rem;
+  border-top: 1px solid $panel-border;
+}
+
+// ─── Nested sidebar navigation ──────────────────────────────────────────────────
+
+.sidebar-nav .nav-parent {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  margin-bottom: 2px;
+  color: $text-secondary;
+  background: transparent;
+  border: none;
+  border-radius: $radius-md;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: background 0.15s, color 0.15s;
+
+  .nav-icon {
+    width: 18px;
+    height: 18px;
+    opacity: 0.65;
+    flex-shrink: 0;
+
+    svg { width: 100%; height: 100%; display: block; }
+  }
+
+  .nav-parent-caret {
+    margin-left: auto;
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    opacity: 0.5;
+    transition: transform 0.15s;
+  }
+
+  &:hover {
+    background: $hover-bg;
+    color: $text-white;
+
+    .nav-icon { opacity: 0.9; }
+  }
+
+  &.open {
+    color: $text-white;
+
+    .nav-parent-caret { transform: rotate(90deg); }
+  }
+
+  &.has-active {
+    .nav-icon { opacity: 1; color: $accent; }
+  }
+}
+
+.sidebar-subnav {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0 4px;
+  padding-left: 0.75rem;
+}
+
+.sidebar-nav .nav-sublink {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0.45rem 0.75rem 0.45rem 1.4rem;
+  margin-bottom: 1px;
+  color: $text-muted;
+  text-decoration: none;
+  border-radius: $radius-md;
+  font-size: 0.82rem;
+  transition: background 0.15s, color 0.15s;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0.55rem;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: $panel-border;
+  }
+
+  &:hover {
+    background: $hover-bg;
+    color: $text-white;
+  }
+
+  &.active {
+    color: $text-white;
+    font-weight: 600;
+    background: $active-bg;
+
+    &::after {
+      content: '';
+      position: absolute;
+      left: 0.5rem;
+      top: 7px;
+      bottom: 7px;
+      width: 2px;
+      border-radius: 0 2px 2px 0;
+      background: $accent;
+    }
+  }
 }

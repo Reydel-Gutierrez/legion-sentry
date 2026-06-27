@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import BrandIdentity from '../common/BrandIdentity';
 
@@ -6,7 +7,15 @@ const NAV_ITEMS = [
   { to: '/devices', label: 'Devices', icon: 'devices' },
   { to: '/managed-devices', label: 'Managed Devices', icon: 'managed' },
   { to: '/network', label: 'Network', icon: 'network' },
-  { to: '/bacnet', label: 'BACnet', icon: 'bacnet' },
+  {
+    label: 'BACnet',
+    icon: 'bacnet',
+    basePath: '/bacnet',
+    children: [
+      { to: '/bacnet/ip', label: 'BACnet IP' },
+      { to: '/bacnet/mstp', label: 'BACnet MS/TP' },
+    ],
+  },
   { to: '/modbus', label: 'Modbus', icon: 'modbus' },
   { to: '/mqtt', label: 'MQTT', icon: 'mqtt' },
   { to: '/diagnostics', label: 'Diagnostics', icon: 'diagnostics' },
@@ -71,6 +80,39 @@ function NavIcon({ name }) {
   return <span className="nav-icon">{icons[name]}</span>;
 }
 
+function NavParent({ item, location }) {
+  const isWithin = location.pathname.startsWith(item.basePath);
+  const [open, setOpen] = useState(isWithin);
+
+  return (
+    <div className="nav-group">
+      <button
+        type="button"
+        className={`nav-parent${open ? ' open' : ''}${isWithin ? ' has-active' : ''}`}
+        onClick={() => setOpen((prev) => !prev)}
+        aria-expanded={open}
+      >
+        <NavIcon name={item.icon} />
+        <span>{item.label}</span>
+        <span className="nav-parent-caret" aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="sidebar-subnav">
+          {item.children.map((child) => (
+            <NavLink
+              key={child.to}
+              to={child.to}
+              className={({ isActive }) => `nav-sublink${isActive ? ' active' : ''}`}
+            >
+              {child.label}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Sidebar() {
   const location = useLocation();
 
@@ -83,20 +125,24 @@ export default function Sidebar() {
       <nav className="sidebar-nav">
         <div className="nav-section nav-section--flat">
           {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) => {
-                const active = isActive
-                  || (item.to === '/devices' && location.pathname.startsWith('/devices/'))
-                  || (item.to === '/managed-devices' && location.pathname.startsWith('/managed-devices'));
-                return `nav-link${active ? ' active' : ''}`;
-              }}
-            >
-              <NavIcon name={item.icon} />
-              <span>{item.label}</span>
-            </NavLink>
+            item.children ? (
+              <NavParent key={item.label} item={item} location={location} />
+            ) : (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) => {
+                  const active = isActive
+                    || (item.to === '/devices' && location.pathname.startsWith('/devices/'))
+                    || (item.to === '/managed-devices' && location.pathname.startsWith('/managed-devices'));
+                  return `nav-link${active ? ' active' : ''}`;
+                }}
+              >
+                <NavIcon name={item.icon} />
+                <span>{item.label}</span>
+              </NavLink>
+            )
           ))}
         </div>
       </nav>

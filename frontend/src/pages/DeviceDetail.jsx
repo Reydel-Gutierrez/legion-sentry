@@ -199,7 +199,7 @@ export default function DeviceDetailPage() {
           <Link to="/devices" className="btn btn-sentry-secondary">
             Back to Devices
           </Link>
-          <Link to="/bacnet" className="btn btn-sentry-secondary">
+          <Link to="/bacnet/ip" className="btn btn-sentry-secondary">
             BACnet
           </Link>
           {!mstp && (

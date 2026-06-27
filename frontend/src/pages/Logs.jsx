@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Table } from 'react-bootstrap';
 import { api } from '../api/client';
-import PanelCard from '../components/common/PanelCard';
+import SectionCard from '../components/common/SectionCard';
+import PageHeader from '../components/common/PageHeader';
+import ActionButton from '../components/common/ActionButton';
+import DataTable from '../components/common/DataTable';
 
 const FILTERS = [
   { id: 'all', label: 'All' },
@@ -37,9 +39,34 @@ export default function LogsPage() {
     load();
   };
 
+  const columns = [
+    { key: 'timestamp', header: 'Timestamp', cellClassName: 'log-ts', render: (log) => formatTimestamp(log.timestamp) },
+    { key: 'level', header: 'Level', render: (log) => <span className={`log-level level-${log.level}`}>{log.level}</span> },
+    { key: 'service', header: 'Service' },
+    { key: 'message', header: 'Message' },
+  ];
+
   return (
     <>
-      <PanelCard title="Log Filter">
+      <PageHeader
+        title="Logs"
+        subtitle="Persistent local event log."
+        actions={(
+          <>
+            <ActionButton size="sm" onClick={() => load()} disabled={loading}>
+              Refresh
+            </ActionButton>
+            <ActionButton size="sm" disabled title="Download not yet implemented">
+              Download
+            </ActionButton>
+            <ActionButton variant="danger" size="sm" onClick={handleClear} disabled={loading}>
+              Clear
+            </ActionButton>
+          </>
+        )}
+      />
+
+      <SectionCard title="Log Filter" className="mb-3">
         <div className="filter-bar">
           {FILTERS.map((f) => (
             <button
@@ -52,48 +79,17 @@ export default function LogsPage() {
             </button>
           ))}
         </div>
-      </PanelCard>
+      </SectionCard>
 
-      <PanelCard title={`Log Entries${loading ? ' — refreshing…' : ''}`} className="mt-3">
-        <Table responsive className="sentry-table mb-0">
-          <thead>
-            <tr>
-              <th>Timestamp</th>
-              <th>Level</th>
-              <th>Service</th>
-              <th>Message</th>
-            </tr>
-          </thead>
-          <tbody>
-            {logs.length === 0 ? (
-              <tr><td colSpan={4} style={{ textAlign: 'center', color: '#58677d' }}>No log entries</td></tr>
-            ) : (
-              logs.map((log) => (
-                <tr key={log.id}>
-                  <td className="log-ts">{formatTimestamp(log.timestamp)}</td>
-                  <td><span className={`log-level level-${log.level}`}>{log.level}</span></td>
-                  <td>{log.service}</td>
-                  <td>{log.message}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </Table>
-      </PanelCard>
-
-      <PanelCard title="Log Actions" className="mt-3">
-        <div className="action-bar">
-          <button type="button" className="btn btn-sentry-secondary" onClick={() => load()} disabled={loading}>
-            Refresh
-          </button>
-          <button type="button" className="btn btn-sentry-secondary" onClick={handleClear} disabled={loading}>
-            Clear
-          </button>
-          <button type="button" className="btn btn-sentry-secondary" disabled title="Download not yet implemented">
-            Download
-          </button>
-        </div>
-      </PanelCard>
+      <SectionCard title={`Log Entries${loading ? ' — refreshing…' : ''}`}>
+        <DataTable
+          columns={columns}
+          rows={logs}
+          rowKey={(log) => log.id}
+          pageSize={15}
+          emptyMessage="No log entries."
+        />
+      </SectionCard>
     </>
   );
 }

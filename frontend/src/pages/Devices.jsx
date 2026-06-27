@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Table } from 'react-bootstrap';
 import { api } from '../api/client';
-import PanelCard from '../components/common/PanelCard';
-import StatusBadge from '../components/common/StatusBadge';
+import SectionCard from '../components/common/SectionCard';
+import StatusChip from '../components/common/StatusChip';
+import PageHeader from '../components/common/PageHeader';
+import ActionButton from '../components/common/ActionButton';
+import DataTable from '../components/common/DataTable';
 
 function formatLastSeen(iso) {
   if (!iso) return '—';
@@ -30,22 +32,18 @@ function mstpNetwork(device) {
 }
 
 const MSTP_STATUS_META = {
-  seen_latest_scan: { variant: 'running', label: 'Seen latest scan' },
-  recently_seen: { variant: 'warn', label: 'Recently seen' },
-  stale: { variant: 'stopped', label: 'Not rediscovered' },
-  never_confirmed: { variant: 'stopped', label: 'Unknown' },
+  seen_latest_scan: { tone: 'success', label: 'Seen latest scan' },
+  recently_seen: { tone: 'warn', label: 'Recently seen' },
+  stale: { tone: 'neutral', label: 'Not rediscovered' },
+  never_confirmed: { tone: 'neutral', label: 'Unknown' },
 };
 
-function mstpStatusBadge(device) {
+function mstpStatusChip(device) {
   const meta = MSTP_STATUS_META[device.mstpStatus] || MSTP_STATUS_META.never_confirmed;
   const title = device.mstpStatus === 'stale'
     ? 'Known inventory device, but it did not answer the latest Who-Is scan.'
     : undefined;
-  return (
-    <span className={`status-badge badge-${meta.variant}`} title={title}>
-      {meta.label}
-    </span>
-  );
+  return <StatusChip tone={meta.tone} label={meta.label} title={title} />;
 }
 
 export default function DevicesPage() {
@@ -176,114 +174,87 @@ export default function DevicesPage() {
     }
   };
 
+  const columns = [
+    {
+      key: 'status',
+      header: 'Status',
+      render: (device) => {
+        if (isMstp(device)) return mstpStatusChip(device);
+        const seenLatest = Boolean(latestSessionId)
+          && device.discoverySessionId === latestSessionId;
+        return (
+          <div className="d-flex gap-2 align-items-center">
+            <StatusChip label={device.status} />
+            {seenLatest && <StatusChip tone="success" label="Latest scan" title="Responded in the most recent scan" />}
+          </div>
+        );
+      },
+    },
+    { key: 'transport', header: 'Transport', render: (d) => d.network || d.transport },
+    { key: 'network', header: 'Network', render: (d) => mstpNetwork(d) },
+    { key: 'mac', header: 'MS/TP MAC', cellClassName: 'mono', render: (d) => mstpMac(d) },
+    { key: 'deviceInstance', header: 'Instance' },
+    { key: 'objectName', header: 'Object Name', render: (d) => d.objectName || '—' },
+    { key: 'vendor', header: 'Vendor', render: (d) => d.vendor || d.vendorName || '—' },
+    { key: 'model', header: 'Model', render: (d) => d.model || d.modelName || '—' },
+    { key: 'lastSeen', header: 'Last Seen', render: (d) => formatLastSeen(d.lastSeen || d.lastSeenAt) },
+    {
+      key: 'actions',
+      header: '',
+      align: 'right',
+      render: (device) => (
+        <ActionButton variant="danger" size="sm" onClick={(e) => handleDelete(e, device.id)} disabled={loading}>
+          Remove
+        </ActionButton>
+      ),
+    },
+  ];
+
   return (
     <>
+      <PageHeader
+        title="Device Inventory"
+        subtitle="All discovered BACnet/IP and MS/TP devices."
+        actions={(
+          <ActionButton variant="primary" onClick={handleDiscoverIp} disabled={loading}>
+            Discover BACnet/IP
+          </ActionButton>
+        )}
+      />
+
       {message && (
         <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'info' ? 'info' : 'success'} mb-3`}>
           {message.text}
         </div>
       )}
 
-      <PanelCard title="Device Inventory">
-        <Table responsive className="sentry-table mb-0">
-          <thead>
-            <tr>
-              <th>Status</th>
-              <th>Transport</th>
-              <th>Network</th>
-              <th>MS/TP MAC</th>
-              <th>Device Instance</th>
-              <th>Object Name</th>
-              <th>Vendor</th>
-              <th>Model</th>
-              <th>Last Seen</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {devices.length === 0 ? (
-              <tr>
-                <td colSpan={10} style={{ textAlign: 'center', color: '#58677d' }}>
-                  No devices in inventory.
-                </td>
-              </tr>
-            ) : (
-              devices.map((device) => {
-                const mstpDevice = isMstp(device);
-                const seenLatest = Boolean(latestSessionId)
-                  && device.discoverySessionId === latestSessionId;
-                return (
-                  <tr
-                    key={device.id}
-                    className="device-row-clickable"
-                    onClick={() => navigate(`/devices/${device.id}`)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(k) => k.key === 'Enter' && navigate(`/devices/${device.id}`)}
-                  >
-                    <td>
-                      {mstpDevice ? (
-                        mstpStatusBadge(device)
-                      ) : (
-                        <>
-                          <StatusBadge status={device.status} label={device.status} />
-                          {seenLatest && (
-                            <span
-                              className="status-badge badge-running"
-                              style={{ marginLeft: '0.4rem' }}
-                              title="Responded in the most recent scan"
-                            >
-                              Seen in latest scan
-                            </span>
-                          )}
-                        </>
-                      )}
-                    </td>
-                    <td>{device.network || device.transport}</td>
-                    <td>{mstpNetwork(device)}</td>
-                    <td className="mono">{mstpMac(device)}</td>
-                    <td>{device.deviceInstance}</td>
-                    <td>{device.objectName || '—'}</td>
-                    <td>{device.vendor || device.vendorName || '—'}</td>
-                    <td>{device.model || device.modelName || '—'}</td>
-                    <td>{formatLastSeen(device.lastSeen || device.lastSeenAt)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-sentry-secondary btn-sm"
-                        onClick={(e) => handleDelete(e, device.id)}
-                        disabled={loading}
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </Table>
-      </PanelCard>
+      <SectionCard title="Devices" className="mb-3">
+        <DataTable
+          columns={columns}
+          rows={devices}
+          rowKey={(d) => d.id}
+          pageSize={10}
+          onRowClick={(device) => navigate(`/devices/${device.id}`)}
+          emptyMessage="No devices in inventory."
+        />
+      </SectionCard>
 
-      <PanelCard title="Discovery Actions" className="mt-3">
+      <SectionCard title="Discovery Actions">
         <div className="action-bar">
-          <button type="button" className="btn btn-sentry-secondary" onClick={handleRefresh} disabled={loading}>
+          <ActionButton onClick={handleRefresh} disabled={loading}>
             Refresh
-          </button>
-          <button type="button" className="btn btn-sentry-primary" onClick={handleDiscoverIp} disabled={loading}>
-            Discover BACnet/IP
-          </button>
-          <button type="button" className="btn btn-sentry-secondary" onClick={handleDiscoverMstp} disabled={loading}>
+          </ActionButton>
+          <ActionButton onClick={handleDiscoverMstp} disabled={loading}>
             Discover BACnet MS/TP
-          </button>
-          <button type="button" className="btn btn-sentry-secondary" onClick={handleClearSession} disabled={loading}>
+          </ActionButton>
+          <ActionButton onClick={handleClearSession} disabled={loading}>
             Clear Latest Scan
-          </button>
-          <button type="button" className="btn btn-sentry-danger" onClick={handleClear} disabled={loading || devices.length === 0}>
+          </ActionButton>
+          <ActionButton variant="danger" onClick={handleClear} disabled={loading || devices.length === 0}>
             Clear Inventory
-          </button>
+          </ActionButton>
         </div>
-      </PanelCard>
+      </SectionCard>
     </>
   );
 }

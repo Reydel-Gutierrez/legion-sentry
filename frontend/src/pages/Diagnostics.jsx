@@ -4,6 +4,8 @@ import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
 import MetricBar from '../components/common/MetricBar';
 import PanelCard from '../components/common/PanelCard';
+import PageHeader from '../components/common/PageHeader';
+import ActionButton from '../components/common/ActionButton';
 import StatusBadge from '../components/common/StatusBadge';
 import LoadingState from '../components/common/LoadingState';
 
@@ -135,6 +137,16 @@ export default function DiagnosticsPage() {
 
   return (
     <>
+      <PageHeader
+        title="Diagnostics"
+        subtitle="Hardware, network and RS485 serial diagnostics."
+        actions={(
+          <ActionButton size="sm" onClick={handleRefresh} disabled={loading}>
+            Refresh
+          </ActionButton>
+        )}
+      />
+
       {message && (
         <div className={`alert-sentry alert-sentry-${message.type === 'error' ? 'error' : message.type === 'success' ? 'success' : 'info'} mb-3`}>
           {message.text}

@@ -7,7 +7,8 @@ import DevicesPage from './pages/Devices';
 import ManagedDevicesPage from './pages/ManagedDevices';
 import DeviceDetailPage from './pages/DeviceDetail';
 import NetworkPage from './pages/Network';
-import BacnetPage from './pages/Bacnet';
+import BacnetIpPage from './pages/BacnetIp';
+import BacnetMstpPage from './pages/BacnetMstp';
 import ModbusPage from './pages/Modbus';
 import MqttPage from './pages/Mqtt';
 import DiagnosticsPage from './pages/Diagnostics';
@@ -31,7 +32,9 @@ export default function App() {
         <Route path="managed-devices" element={<ManagedDevicesPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />
         <Route path="network" element={<NetworkPage />} />
-        <Route path="bacnet" element={<BacnetPage />} />
+        <Route path="bacnet" element={<Navigate to="/bacnet/ip" replace />} />
+        <Route path="bacnet/ip" element={<BacnetIpPage />} />
+        <Route path="bacnet/mstp" element={<BacnetMstpPage />} />
         <Route path="modbus" element={<ModbusPage />} />
         <Route path="mqtt" element={<MqttPage />} />
         <Route path="diagnostics" element={<DiagnosticsPage />} />

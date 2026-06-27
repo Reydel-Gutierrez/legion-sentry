@@ -1449,14 +1449,13 @@ async function readPropertiesForObject({
   const label = `${bacnetApdu.objectTypeLabel(objectType)}:${instance}`;
 
   try {
-    const rpmApdu = bacnetApdu.encodeReadPropertyMultiple(
-      0,
-      objectType,
-      instance,
-      bacnetApdu.POINT_DISCOVERY_PROPERTIES,
-    );
     const rpmResponse = await sendConfirmedRequest(
-      rpmApdu,
+      (invokeId) => bacnetApdu.encodeReadPropertyMultiple(
+        invokeId,
+        objectType,
+        instance,
+        bacnetApdu.POINT_DISCOVERY_PROPERTIES,
+      ),
       'readPropertyMultiple',
       `RPM ${label}`,
     );
@@ -1471,13 +1470,14 @@ async function readPropertiesForObject({
   const properties = {};
   for (const propertyId of bacnetApdu.POINT_DISCOVERY_PROPERTIES) {
     try {
-      const apdu = bacnetApdu.encodeReadProperty(0, objectType, instance, propertyId);
-      const response = await sendConfirmedRequest(apdu, 'readProperty', `RP ${label} prop ${propertyId}`);
-      if (response.presentValue != null || response.propertyValue) {
-        properties[propertyId] = {
-          propertyId,
-          value: response.presentValue ?? bacnetApdu.formatPresentValue(response.propertyValue),
-        };
+      const response = await sendConfirmedRequest(
+        (invokeId) => bacnetApdu.encodeReadProperty(invokeId, objectType, instance, propertyId),
+        'readProperty',
+        `RP ${label} prop ${propertyId}`,
+      );
+      const value = bacnetApdu.formatPresentValue(response.values?.[0]);
+      if (value != null) {
+        properties[propertyId] = { propertyId, value };
       }
     } catch (err) {
       recordLog('debug', `ReadProperty ${propertyId} failed for ${label}: ${err.message}`);
@@ -1485,6 +1485,66 @@ async function readPropertiesForObject({
   }
 
   return mapPropertiesToPointFields(properties);
+}
+
+// Read a device's objectList. Tries a single ReadProperty for the whole list
+// first (works when it fits in one MS/TP frame); if that fails or comes back
+// empty, falls back to reading the array length (index 0) then each element by
+// array index, which avoids segmentation on larger devices.
+async function readDeviceObjectList({
+  deviceInstance,
+  sendConfirmedRequest,
+  ensureSessionTime,
+  recordLog,
+}) {
+  const deviceType = bacnetApdu.DEVICE_OBJECT_TYPE;
+  const objectListProp = bacnetApdu.BACNET_PROPERTIES.objectList;
+
+  try {
+    const response = await sendConfirmedRequest(
+      (invokeId) => bacnetApdu.encodeReadProperty(invokeId, deviceType, deviceInstance, objectListProp),
+      'readProperty',
+      'objectList (full)',
+    );
+    const objects = bacnetApdu.valuesToObjectList(response.values);
+    if (objects.length) {
+      recordLog('info', `objectList read in one response — ${objects.length} object(s)`);
+      return objects;
+    }
+  } catch (err) {
+    recordLog('warn', `Full objectList read failed: ${err.message} — falling back to array-index reads`);
+  }
+
+  const countResponse = await sendConfirmedRequest(
+    (invokeId) => bacnetApdu.encodeReadProperty(invokeId, deviceType, deviceInstance, objectListProp, 0),
+    'readProperty',
+    'objectList length',
+  );
+  const count = bacnetApdu.firstUnsigned(countResponse.values);
+  if (!count || count < 1) {
+    return [];
+  }
+
+  recordLog('info', `objectList length reported as ${count} — reading elements by array index`);
+  const limit = Math.min(count, MAX_POINT_OBJECTS + 1);
+  const objects = [];
+  for (let index = 1; index <= limit; index += 1) {
+    ensureSessionTime();
+    try {
+      const elementResponse = await sendConfirmedRequest(
+        (invokeId) => bacnetApdu.encodeReadProperty(invokeId, deviceType, deviceInstance, objectListProp, index),
+        'readProperty',
+        `objectList[${index}]`,
+      );
+      const objectId = bacnetApdu.firstObjectId(elementResponse.values);
+      if (objectId) {
+        objects.push(objectId);
+      }
+    } catch (err) {
+      recordLog('warn', `objectList[${index}] read failed: ${err.message}`);
+    }
+  }
+  return objects;
 }
 
 async function discoverPointsForDevice(options = {}) {
@@ -1599,12 +1659,11 @@ async function discoverPointsForDevice(options = {}) {
       pending.set(invokeId, { resolve, reject, timer, expectType });
     });
 
-    const sendConfirmedRequest = async (apduTemplate, expectType, label) => {
+    const sendConfirmedRequest = async (buildApdu, expectType, label) => {
       let lastError = null;
       for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
         const invokeId = nextInvokeId();
-        const apdu = Buffer.from(apduTemplate);
-        apdu[1] = invokeId;
+        const apdu = buildApdu(invokeId);
         const payload = Buffer.concat([bacnetApdu.buildConfirmedNpdu(), apdu]);
         const frame = buildMstpFrame(
           MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY,
@@ -1614,7 +1673,7 @@ async function discoverPointsForDevice(options = {}) {
         );
 
         const responsePromise = waitForResponse(invokeId, expectType);
-        tokenEngine.queueBacnetFrame(frame, label);
+        tokenEngine.queueBacnetFrame(frame, label, { expectsReply: true });
         scheduleTokenEngineWork(tokenEngine, port, recordLog);
         recordLog('info', `Point discovery request queued — ${label} (invoke ${invokeId}, attempt ${attempt}/${maxRetries})`);
 
@@ -1712,23 +1771,12 @@ async function discoverPointsForDevice(options = {}) {
     };
 
     ensureSessionTime();
-    const objectListInvoke = nextInvokeId();
-    const objectListApdu = bacnetApdu.encodeReadProperty(
-      objectListInvoke,
-      bacnetApdu.DEVICE_OBJECT_TYPE,
+    const objectList = await readDeviceObjectList({
       deviceInstance,
-      bacnetApdu.BACNET_PROPERTIES.objectList,
-    );
-    const objectListResponse = await sendConfirmedRequest(
-      objectListApdu,
-      'readProperty',
-      'objectList',
-    );
-    const objectList = bacnetApdu.extractObjectListFromAck(
-      objectListResponse,
-      objectListResponse.responseData,
-      objectListResponse.apduOffset,
-    );
+      sendConfirmedRequest,
+      ensureSessionTime,
+      recordLog,
+    });
 
     if (!objectList.length) {
       throw new Error('Device objectList is empty or could not be decoded');

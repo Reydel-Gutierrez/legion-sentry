@@ -1,5 +1,10 @@
 const DEVICE_OBJECT_TYPE = 8;
 
+// Max APDU length accepted encoding (low nibble of the second APDU byte).
+// MS/TP frames carry up to 480 APDU bytes, so we advertise 480 (code 3) and
+// no segmentation. This keeps device responses inside a single MS/TP frame.
+const MAX_APDU_480 = 0x03;
+
 const BACNET_PROPERTIES = {
   objectList: 76,
   objectName: 77,
@@ -20,6 +25,19 @@ const POINT_DISCOVERY_PROPERTIES = [
   BACNET_PROPERTIES.reliability,
   BACNET_PROPERTIES.outOfService,
 ];
+
+const CONFIRMED_SERVICE = {
+  readProperty: 0x0c,
+  readPropertyMultiple: 0x0e,
+};
+
+const PDU_TYPE = {
+  CONFIRMED_REQUEST: 0x00,
+  COMPLEX_ACK: 0x30,
+  ERROR: 0x50,
+  REJECT: 0x60,
+  ABORT: 0x70,
+};
 
 const OBJECT_TYPE_NAMES = {
   0: 'analog-input',
@@ -53,31 +71,13 @@ const OBJECT_TYPE_NAMES = {
   28: 'load-control',
   29: 'structured-view',
   30: 'access-door',
-  31: 'timer',
-  32: 'access-credential',
-  33: 'access-point',
-  34: 'access-rights',
-  35: 'access-user',
   36: 'access-zone',
-  37: 'credential-data-input',
-  38: 'network-security',
   39: 'bitstring-value',
   40: 'characterstring-value',
-  41: 'date-pattern-value',
-  42: 'date-value',
-  43: 'datetime-pattern-value',
-  44: 'datetime-value',
   45: 'integer-value',
   46: 'large-analog-value',
-  47: 'octetstring-value',
   48: 'positive-integer-value',
-  49: 'time-pattern-value',
   50: 'time-value',
-  51: 'notification-forwarder',
-  52: 'alert-enrollment',
-  53: 'channel',
-  54: 'lighting-output',
-  55: 'binary-lighting-output',
   56: 'network-port',
 };
 
@@ -85,15 +85,33 @@ function objectTypeLabel(objectType) {
   return OBJECT_TYPE_NAMES[objectType] || `type-${objectType}`;
 }
 
-function encodeObjectIdentifier(objectType, instance) {
-  const id = ((objectType & 0x3ff) << 22) | (instance & 0x3fffff);
-  return Buffer.from([
-    0xc4,
-    (id >> 24) & 0xff,
-    (id >> 16) & 0xff,
-    (id >> 8) & 0xff,
+function encodeUnsignedBytes(value) {
+  if (value <= 0) return [0];
+  const bytes = [];
+  let v = value;
+  while (v > 0) {
+    bytes.unshift(v & 0xff);
+    v = Math.floor(v / 256);
+  }
+  return bytes;
+}
+
+// Context-tagged unsigned (tag class = context, value encoded big-endian).
+function encodeContextUnsigned(tagNumber, value) {
+  const bytes = encodeUnsignedBytes(value);
+  const header = ((tagNumber & 0x0f) << 4) | 0x08 | (bytes.length & 0x07);
+  return Buffer.from([header, ...bytes]);
+}
+
+// Raw 4-byte BACnetObjectIdentifier (no tag).
+function objectIdBytes(objectType, instance) {
+  const id = (objectType * 0x400000) + (instance & 0x3fffff);
+  return [
+    Math.floor(id / 0x1000000) & 0xff,
+    Math.floor(id / 0x10000) & 0xff,
+    Math.floor(id / 0x100) & 0xff,
     id & 0xff,
-  ]);
+  ];
 }
 
 function parseObjectIdentifier(data, offset) {
@@ -107,33 +125,47 @@ function parseObjectIdentifier(data, offset) {
   };
 }
 
-function encodeReadProperty(invokeId, objectType, instance, propertyId) {
-  const objectIdBytes = encodeObjectIdentifier(objectType, instance);
-  return Buffer.concat([
-    Buffer.from([0x00, invokeId & 0xff, 0x0c]),
-    Buffer.from([0x0c]),
-    objectIdBytes,
-    Buffer.from([0x19, 0x91, propertyId & 0xff]),
-  ]);
+function confirmedRequestHeader(invokeId, serviceChoice) {
+  // [PDU type | flags], [max segments | max APDU], [invoke id], [service choice]
+  return [PDU_TYPE.CONFIRMED_REQUEST, MAX_APDU_480, invokeId & 0xff, serviceChoice & 0xff];
+}
+
+function encodeReadProperty(invokeId, objectType, instance, propertyId, arrayIndex) {
+  const parts = [
+    ...confirmedRequestHeader(invokeId, CONFIRMED_SERVICE.readProperty),
+    // objectIdentifier [0] (context tag 0, length 4)
+    0x0c,
+    ...objectIdBytes(objectType, instance),
+  ];
+  // propertyIdentifier [1]
+  parts.push(...encodeContextUnsigned(1, propertyId));
+  // propertyArrayIndex [2] (optional)
+  if (arrayIndex != null) {
+    parts.push(...encodeContextUnsigned(2, arrayIndex));
+  }
+  return Buffer.from(parts);
 }
 
 function encodeReadPropertyMultiple(invokeId, objectType, instance, propertyIds) {
-  const objectIdBytes = encodeObjectIdentifier(objectType, instance);
-  const propParts = [];
+  const parts = [
+    ...confirmedRequestHeader(invokeId, CONFIRMED_SERVICE.readPropertyMultiple),
+    // objectIdentifier [0]
+    0x0c,
+    ...objectIdBytes(objectType, instance),
+    // listOfPropertyReferences [1] opening tag
+    0x1e,
+  ];
   for (const propertyId of propertyIds) {
-    propParts.push(Buffer.from([0x0e, 0x09, 0x91, propertyId & 0xff, 0x0f]));
+    // propertyIdentifier [0] of BACnetPropertyReference
+    parts.push(...encodeContextUnsigned(0, propertyId));
   }
-  return Buffer.concat([
-    Buffer.from([0x00, invokeId & 0xff, 0x0e]),
-    Buffer.from([0x0e, 0x0e, 0x0c]),
-    objectIdBytes,
-    Buffer.from([0x1e]),
-    ...propParts,
-    Buffer.from([0x1f, 0x0f, 0x0f]),
-  ]);
+  // closing tag [1]
+  parts.push(0x1f);
+  return Buffer.from(parts);
 }
 
 function buildConfirmedNpdu() {
+  // NPDU version 1, control 0x04 (expecting reply, no addressing for local MS/TP).
   return Buffer.from([0x01, 0x04]);
 }
 
@@ -141,26 +173,29 @@ function readTag(data, offset) {
   if (offset >= data.length) return null;
   const tagByte = data[offset];
   const isContext = (tagByte & 0x08) !== 0;
-  const tagNumber = (tagByte >> 4) & 0x07;
-  let length = tagByte & 0x07;
+  const tagNumber = (tagByte >> 4) & 0x0f;
+  const lvt = tagByte & 0x07;
+  let length = lvt;
   let headerLen = 1;
   let opening = false;
   let closing = false;
 
-  if (length === 5) {
-    length = data[offset + 1];
-    headerLen = 2;
-  } else if (isContext && length === 6) {
+  if (isContext && lvt === 6) {
     opening = true;
     length = 0;
-  } else if (isContext && length === 7) {
+  } else if (isContext && lvt === 7) {
     closing = true;
     length = 0;
+  } else if (lvt === 5) {
+    length = data[offset + 1];
+    headerLen = 2;
   }
 
   return {
+    tagByte,
     isContext,
     tagNumber,
+    lvt,
     length,
     headerLen,
     opening,
@@ -178,167 +213,145 @@ function readUnsigned(data, offset, length) {
   return value;
 }
 
-function decodeApplicationValue(data, offset) {
-  const tag = readTag(data, offset);
-  if (!tag || tag.isContext) return null;
+function readSigned(data, offset, length) {
+  if (length === 0) return 0;
+  let value = (data[offset] & 0x80) ? -1 : 0;
+  for (let i = 0; i < length; i += 1) {
+    value = (value * 256) + data[offset + i];
+  }
+  // Correct for the sign-extension seed above.
+  if (data[offset] & 0x80) {
+    value += 256 ** length;
+    value -= 256 ** length;
+  }
+  return value;
+}
 
-  const { tagNumber, length, valueOffset } = tag;
-  const slice = data.slice(valueOffset, valueOffset + length);
-
-  if (tagNumber === 12 && length === 4) {
-    return { type: 'objectIdentifier', value: parseObjectIdentifier(data, valueOffset), nextOffset: tag.nextOffset };
-  }
-  if (tagNumber === 2) {
-    return { type: 'unsigned', value: readUnsigned(data, valueOffset, length), nextOffset: tag.nextOffset };
-  }
-  if (tagNumber === 4) {
-    return { type: 'real', value: slice.readFloatBE(0), nextOffset: tag.nextOffset };
-  }
-  if (tagNumber === 9) {
-    return { type: 'enumerated', value: readUnsigned(data, valueOffset, length), nextOffset: tag.nextOffset };
-  }
-  if (tagNumber === 1) {
-    return { type: 'boolean', value: slice[0] !== 0, nextOffset: tag.nextOffset };
-  }
-  if (tagNumber === 7) {
-    return { type: 'characterString', value: slice.length > 0 ? slice.slice(1).toString('utf8') : '', nextOffset: tag.nextOffset };
-  }
-  if (tagNumber === 3) {
-    return { type: 'bitString', value: formatBitString(slice), nextOffset: tag.nextOffset };
-  }
-
-  return { type: 'raw', value: slice.toString('hex'), nextOffset: tag.nextOffset };
+function decodeCharacterString(slice) {
+  if (!slice.length) return '';
+  const charset = slice[0];
+  const body = slice.slice(1);
+  if (charset === 0) return body.toString('utf8');
+  if (charset === 5) return body.toString('utf16le');
+  return body.toString('latin1');
 }
 
 function formatBitString(slice) {
   if (!slice.length) return '';
-  const unused = slice[0];
+  const unusedBits = slice[0];
   const bits = [];
   for (let i = 1; i < slice.length; i += 1) {
     for (let bit = 7; bit >= 0; bit -= 1) {
       bits.push((slice[i] >> bit) & 1);
     }
   }
-  return bits.slice(0, Math.max(0, bits.length - unused)).join('');
+  const usable = Math.max(0, bits.length - unusedBits);
+  return bits.slice(0, usable).join('');
+}
+
+// Decode a single application-tagged value at `offset`. Returns null for a
+// context tag (caller is responsible for structure).
+function decodeApplicationValue(data, offset) {
+  if (offset >= data.length) return null;
+  const tagByte = data[offset];
+  if ((tagByte & 0x08) !== 0) return null;
+
+  const tagNumber = (tagByte >> 4) & 0x0f;
+  const lvt = tagByte & 0x07;
+
+  // Boolean: the value lives in the LVT field; there are no content octets.
+  if (tagNumber === 1) {
+    return { type: 'boolean', value: lvt === 1, nextOffset: offset + 1 };
+  }
+
+  let length = lvt;
+  let headerLen = 1;
+  if (lvt === 5) {
+    length = data[offset + 1];
+    headerLen = 2;
+  }
+  const valueOffset = offset + headerLen;
+  const slice = data.slice(valueOffset, valueOffset + length);
+  const nextOffset = valueOffset + length;
+
+  switch (tagNumber) {
+    case 0:
+      return { type: 'null', value: null, nextOffset };
+    case 2:
+      return { type: 'unsigned', value: readUnsigned(data, valueOffset, length), nextOffset };
+    case 3:
+      return { type: 'signed', value: readSigned(data, valueOffset, length), nextOffset };
+    case 4:
+      return { type: 'real', value: length >= 4 ? slice.readFloatBE(0) : null, nextOffset };
+    case 5:
+      return { type: 'double', value: length >= 8 ? slice.readDoubleBE(0) : null, nextOffset };
+    case 6:
+      return { type: 'octetString', value: slice.toString('hex'), nextOffset };
+    case 7:
+      return { type: 'characterString', value: decodeCharacterString(slice), nextOffset };
+    case 8:
+      return { type: 'bitString', value: formatBitString(slice), nextOffset };
+    case 9:
+      return { type: 'enumerated', value: readUnsigned(data, valueOffset, length), nextOffset };
+    case 10:
+      return { type: 'date', value: slice.toString('hex'), nextOffset };
+    case 11:
+      return { type: 'time', value: slice.toString('hex'), nextOffset };
+    case 12:
+      return { type: 'objectIdentifier', value: parseObjectIdentifier(data, valueOffset), nextOffset };
+    default:
+      return { type: 'raw', value: slice.toString('hex'), nextOffset };
+  }
 }
 
 function formatPresentValue(decoded) {
   if (decoded == null) return null;
-  if (typeof decoded === 'string' || typeof decoded === 'number' || typeof decoded === 'boolean') {
-    return decoded;
-  }
-  if (decoded.type === 'real') return decoded.value;
-  if (decoded.type === 'enumerated' || decoded.type === 'unsigned') return decoded.value;
-  if (decoded.type === 'boolean') return decoded.value;
-  if (decoded.type === 'characterString') return decoded.value;
-  if (decoded.type === 'bitString') return decoded.value;
-  if (decoded.type === 'objectIdentifier') {
+  if (typeof decoded !== 'object') return decoded;
+  if (decoded.type === 'objectIdentifier' && decoded.value) {
     return `${objectTypeLabel(decoded.value.objectType)}:${decoded.value.instance}`;
   }
-  return decoded.value != null ? String(decoded.value) : null;
+  return decoded.value;
 }
 
-function parseObjectListFromValue(data, offset, length) {
-  const end = offset + length;
-  const objects = [];
-  let cursor = offset;
-
-  while (cursor < end) {
-    const tag = readTag(data, cursor);
-    if (!tag) break;
-    if (!tag.isContext && tag.tagNumber === 12 && tag.length === 4) {
-      objects.push(parseObjectIdentifier(data, tag.valueOffset));
-      cursor = tag.nextOffset;
-      continue;
-    }
-    if (tag.opening) {
-      cursor = tag.valueOffset;
-      continue;
-    }
-    if (tag.closing) {
-      cursor = tag.valueOffset;
-      continue;
-    }
-    cursor = tag.nextOffset;
-  }
-
-  return objects;
-}
-
-function parseReadPropertyComplexAck(data, apduOffset) {
-  if (data.length < apduOffset + 3) return { error: 'apdu-too-short' };
-  const pduType = data[apduOffset];
-  if ((pduType & 0xf0) !== 0x30) {
-    return { error: 'not-complex-ack', pduType };
-  }
-  const invokeId = data[apduOffset + 1];
-  const serviceAck = data[apduOffset + 2];
-  if (serviceAck !== 0x0c) {
-    return { error: 'unexpected-service-ack', serviceAck, invokeId };
-  }
+// Parse a ReadProperty-ACK, returning the list of decoded application values
+// contained in the property-value [3] field.
+function parseReadPropertyAck(data, apduOffset) {
+  const result = {
+    type: 'readProperty',
+    invokeId: data[apduOffset + 1],
+    propertyId: null,
+    values: [],
+  };
 
   let cursor = apduOffset + 3;
   while (cursor < data.length) {
     const tag = readTag(data, cursor);
     if (!tag) break;
-    if (tag.isContext && tag.tagNumber === 3 && !tag.opening && !tag.closing) {
-      const decoded = decodeApplicationValue(data, tag.valueOffset);
-      return {
-        invokeId,
-        propertyValue: decoded,
-        presentValue: formatPresentValue(decoded),
-        rawProperty: decoded,
-      };
+
+    if (tag.isContext && tag.tagNumber === 1 && !tag.opening && !tag.closing) {
+      result.propertyId = readUnsigned(data, tag.valueOffset, tag.length);
+      cursor = tag.nextOffset;
+      continue;
     }
+
     if (tag.isContext && tag.tagNumber === 3 && tag.opening) {
-      cursor = tag.valueOffset;
-      continue;
-    }
-    cursor = tag.nextOffset;
-  }
-
-  return { invokeId, error: 'property-value-not-found' };
-}
-
-function parseReadPropertyMultipleComplexAck(data, apduOffset) {
-  if (data.length < apduOffset + 3) return { error: 'apdu-too-short' };
-  const pduType = data[apduOffset];
-  if ((pduType & 0xf0) !== 0x30) {
-    return { error: 'not-complex-ack', pduType };
-  }
-  const invokeId = data[apduOffset + 1];
-  const serviceAck = data[apduOffset + 2];
-  if (serviceAck !== 0x0e) {
-    return { error: 'unexpected-service-ack', serviceAck, invokeId };
-  }
-
-  const properties = {};
-  let cursor = apduOffset + 3;
-  let currentPropertyId = null;
-
-  while (cursor < data.length) {
-    const tag = readTag(data, cursor);
-    if (!tag) break;
-
-    if (tag.isContext && tag.tagNumber === 2 && !tag.opening && tag.length === 1) {
-      const propTag = readTag(data, tag.valueOffset);
-      if (propTag && !propTag.isContext && propTag.tagNumber === 9) {
-        currentPropertyId = readUnsigned(data, propTag.valueOffset, propTag.length);
+      let inner = tag.valueOffset;
+      while (inner < data.length) {
+        const innerTag = readTag(data, inner);
+        if (!innerTag) break;
+        if (innerTag.isContext && innerTag.tagNumber === 3 && innerTag.closing) {
+          inner = innerTag.valueOffset;
+          break;
+        }
+        const value = decodeApplicationValue(data, inner);
+        if (!value) {
+          inner = innerTag.nextOffset;
+          continue;
+        }
+        result.values.push(value);
+        inner = value.nextOffset;
       }
-      cursor = tag.nextOffset;
-      continue;
-    }
-
-    if (tag.isContext && tag.tagNumber === 5 && !tag.opening && !tag.closing) {
-      const decoded = decodeApplicationValue(data, tag.valueOffset);
-      if (currentPropertyId != null) {
-        properties[currentPropertyId] = {
-          propertyId: currentPropertyId,
-          value: formatPresentValue(decoded),
-          raw: decoded,
-        };
-      }
-      cursor = tag.nextOffset;
+      cursor = inner;
       continue;
     }
 
@@ -346,96 +359,132 @@ function parseReadPropertyMultipleComplexAck(data, apduOffset) {
       cursor = tag.valueOffset;
       continue;
     }
-
     cursor = tag.nextOffset;
   }
 
-  return { invokeId, properties };
+  return result;
 }
 
-function parseErrorOrAbort(data, apduOffset) {
-  if (data.length < apduOffset + 2) return null;
-  const pduType = data[apduOffset];
-  const invokeId = data[apduOffset + 1];
-  const high = pduType & 0xf0;
-  if (high === 0x50 && data.length >= apduOffset + 4) {
-    return { kind: 'error', invokeId, errorClass: data[apduOffset + 2], errorCode: data[apduOffset + 3] };
-  }
-  if (high === 0x70 && data.length >= apduOffset + 3) {
-    return { kind: 'abort', invokeId, abortReason: data[apduOffset + 2] };
-  }
-  if (high === 0x60 && data.length >= apduOffset + 3) {
-    return { kind: 'reject', invokeId, rejectReason: data[apduOffset + 2] };
-  }
-  return null;
-}
-
-function parseConfirmedResponse(data, apduOffset) {
-  if (apduOffset == null || data.length < apduOffset + 2) return { error: 'no-apdu' };
-  const pduType = data[apduOffset];
-  const high = pduType & 0xf0;
-  if (high === 0x30) {
-    const serviceAck = data[apduOffset + 2];
-    if (serviceAck === 0x0c) {
-      return { type: 'readProperty', ...parseReadPropertyComplexAck(data, apduOffset) };
-    }
-    if (serviceAck === 0x0e) {
-      return { type: 'readPropertyMultiple', ...parseReadPropertyMultipleComplexAck(data, apduOffset) };
-    }
-    return { type: 'complexAck', invokeId: data[apduOffset + 1], serviceAck };
-  }
-  const err = parseErrorOrAbort(data, apduOffset);
-  if (err) return { type: err.kind, ...err };
-  return { type: 'unknown', pduType, invokeId: data[apduOffset + 1] };
-}
-
-function parseObjectListResponse(parsed) {
-  if (!parsed || parsed.error) return [];
-  const value = parsed.propertyValue || parsed.rawProperty;
-  if (!value) return [];
-
-  if (value.type === 'objectIdentifier') {
-    return [value.value];
-  }
-
-  if (value.type === 'raw' && value.value) {
-    return [];
-  }
-
-  return [];
-}
-
-function extractObjectListFromAck(parsed, data, apduOffset) {
-  if (!parsed || parsed.error) return [];
+// Parse a ReadPropertyMultiple-ACK into a map keyed by property identifier.
+function parseReadPropertyMultipleAck(data, apduOffset) {
+  const result = {
+    type: 'readPropertyMultiple',
+    invokeId: data[apduOffset + 1],
+    properties: {},
+  };
 
   let cursor = apduOffset + 3;
+  let currentPropertyId = null;
+
   while (cursor < data.length) {
     const tag = readTag(data, cursor);
     if (!tag) break;
-    if (tag.isContext && tag.tagNumber === 3) {
-      if (tag.opening) {
-        const objects = [];
-        let inner = tag.valueOffset;
-        while (inner < data.length) {
-          const innerTag = readTag(data, inner);
-          if (!innerTag) break;
-          if (innerTag.closing) break;
-          if (!innerTag.isContext && innerTag.tagNumber === 12 && innerTag.length === 4) {
-            objects.push(parseObjectIdentifier(data, innerTag.valueOffset));
-          }
-          inner = innerTag.nextOffset;
+
+    // propertyIdentifier [2]
+    if (tag.isContext && tag.tagNumber === 2 && !tag.opening && !tag.closing) {
+      currentPropertyId = readUnsigned(data, tag.valueOffset, tag.length);
+      cursor = tag.nextOffset;
+      continue;
+    }
+
+    // propertyValue [4] opening tag
+    if (tag.isContext && tag.tagNumber === 4 && tag.opening) {
+      const value = decodeApplicationValue(data, tag.valueOffset);
+      if (currentPropertyId != null && value) {
+        result.properties[currentPropertyId] = {
+          propertyId: currentPropertyId,
+          value: formatPresentValue(value),
+          raw: value,
+        };
+      }
+      // Advance past the value and its closing [4] tag.
+      let inner = value ? value.nextOffset : tag.valueOffset;
+      const closeTag = readTag(data, inner);
+      if (closeTag && closeTag.closing) inner = closeTag.valueOffset;
+      cursor = inner;
+      currentPropertyId = null;
+      continue;
+    }
+
+    // propertyAccessError [5] opening tag — skip to its closing tag.
+    if (tag.isContext && tag.tagNumber === 5 && tag.opening) {
+      let inner = tag.valueOffset;
+      while (inner < data.length) {
+        const innerTag = readTag(data, inner);
+        if (!innerTag) break;
+        if (innerTag.isContext && innerTag.tagNumber === 5 && innerTag.closing) {
+          inner = innerTag.valueOffset;
+          break;
         }
-        return objects;
+        inner = innerTag.nextOffset;
       }
-      const decoded = decodeApplicationValue(data, tag.valueOffset);
-      if (decoded?.type === 'objectIdentifier') {
-        return [decoded.value];
-      }
+      cursor = inner;
+      currentPropertyId = null;
+      continue;
+    }
+
+    if (tag.opening || tag.closing) {
+      cursor = tag.valueOffset;
+      continue;
     }
     cursor = tag.nextOffset;
   }
 
-  return parseObjectListResponse(parsed);
+  return result;
+}
+
+function parseConfirmedResponse(data, apduOffset) {
+  if (apduOffset == null || data.length < apduOffset + 2) {
+    return { type: 'unknown', invokeId: null };
+  }
+
+  const pduType = data[apduOffset] & 0xf0;
+  const invokeId = data[apduOffset + 1];
+
+  if (pduType === PDU_TYPE.COMPLEX_ACK) {
+    const serviceAck = data[apduOffset + 2];
+    if (serviceAck === CONFIRMED_SERVICE.readProperty) {
+      return parseReadPropertyAck(data, apduOffset);
+    }
+    if (serviceAck === CONFIRMED_SERVICE.readPropertyMultiple) {
+      return parseReadPropertyMultipleAck(data, apduOffset);
+    }
+    return { type: 'complexAck', invokeId, serviceAck };
+  }
+
+  if (pduType === PDU_TYPE.ERROR) {
+    return {
+      type: 'error',
+      invokeId,
+      errorClass: data[apduOffset + 3],
+      errorCode: data[apduOffset + 4],
+    };
+  }
+  if (pduType === PDU_TYPE.REJECT) {
+    return { type: 'reject', invokeId, rejectReason: data[apduOffset + 2] };
+  }
+  if (pduType === PDU_TYPE.ABORT) {
+    return { type: 'abort', invokeId, abortReason: data[apduOffset + 2] };
+  }
+
+  return { type: 'unknown', invokeId, pduType };
+}
+
+// Extract object identifiers from decoded ReadProperty values.
+function valuesToObjectList(values = []) {
+  return values
+    .filter((v) => v && v.type === 'objectIdentifier' && v.value)
+    .map((v) => v.value);
+}
+
+function firstUnsigned(values = []) {
+  const found = values.find((v) => v && (v.type === 'unsigned' || v.type === 'enumerated'));
+  return found ? found.value : null;
+}
+
+function firstObjectId(values = []) {
+  const list = valuesToObjectList(values);
+  return list.length ? list[0] : null;
 }
 
 module.exports = {
@@ -444,12 +493,12 @@ module.exports = {
   POINT_DISCOVERY_PROPERTIES,
   OBJECT_TYPE_NAMES,
   objectTypeLabel,
-  encodeObjectIdentifier,
-  parseObjectIdentifier,
   encodeReadProperty,
   encodeReadPropertyMultiple,
   buildConfirmedNpdu,
   parseConfirmedResponse,
-  extractObjectListFromAck,
+  valuesToObjectList,
+  firstUnsigned,
+  firstObjectId,
   formatPresentValue,
 };

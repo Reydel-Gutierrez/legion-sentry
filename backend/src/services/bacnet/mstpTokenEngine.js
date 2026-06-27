@@ -78,6 +78,11 @@ class MstpTokenEngine {
 
     this.bacnetFrameQueue = [];
     this.pendingPassToken = false;
+    // When we transmit a reply-expected BACnet frame (e.g. a confirmed
+    // ReadProperty), MS/TP requires us to keep the token and wait for the peer
+    // to reply before passing it on. Treply is bounded (255 ms by spec).
+    this.awaitingReplyUntil = null;
+    this.replyTimeoutMs = options.replyTimeoutMs || 255;
 
     this.stats = {
       tokensReceived: 0,
@@ -111,12 +116,12 @@ class MstpTokenEngine {
   }
 
   queueWhoIsFrame(mstpFrame) {
-    this.queueBacnetFrame(mstpFrame, 'Who-Is');
+    this.queueBacnetFrame(mstpFrame, 'Who-Is', { expectsReply: false });
   }
 
-  queueBacnetFrame(mstpFrame, label = 'BACnet') {
+  queueBacnetFrame(mstpFrame, label = 'BACnet', { expectsReply = false } = {}) {
     if (!mstpFrame || !mstpFrame.length) return;
-    this.bacnetFrameQueue.push(Buffer.from(mstpFrame));
+    this.bacnetFrameQueue.push({ buffer: Buffer.from(mstpFrame), expectsReply, label });
     this.onLog('debug', `${label} frame queued for token-gated send (${this.bacnetFrameQueue.length} in queue)`);
   }
 
@@ -157,6 +162,14 @@ class MstpTokenEngine {
       this.seenRingActivity = true;
     }
 
+    // A data-bearing frame received while we are holding the token waiting for
+    // a reply means the peer has answered — we may now pass the token.
+    if (this.awaitingReplyUntil != null && frame.dataLength > 0) {
+      this.awaitingReplyUntil = null;
+      this.pendingPassToken = true;
+      this.onLog('debug', 'Reply received from peer — token will be passed');
+    }
+
     return null;
   }
 
@@ -176,27 +189,42 @@ class MstpTokenEngine {
 
     if (this.pendingPassToken) {
       this.pendingPassToken = false;
+      this.awaitingReplyUntil = null;
+      return this._emitPassToken();
+    }
+
+    // Hold the token while waiting for a reply-expected response.
+    if (this.awaitingReplyUntil != null) {
+      if (nowMs < this.awaitingReplyUntil) {
+        return null;
+      }
+      this.awaitingReplyUntil = null;
+      this.onLog('debug', 'Reply window elapsed without response — passing token');
       return this._emitPassToken();
     }
 
     if (this.state === MSTP_STATE.USE_TOKEN && this.holdingToken) {
-      if (nowMs - this.tokenReceivedAt >= this.tUsage) {
+      if (nowMs - this.tokenReceivedAt >= this.tUsage && this.bacnetFrameQueue.length === 0) {
         this.onLog('info', `Tusage (${this.tUsage.toFixed(1)}ms) elapsed — passing token`);
         return this._emitPassToken();
       }
 
       if (this.frameCount < this.maxInfoFrames && this.bacnetFrameQueue.length > 0) {
-        const bacnetFrame = this.bacnetFrameQueue.shift();
+        const item = this.bacnetFrameQueue.shift();
         this.frameCount += 1;
         this.stats.whoIsSentWhileHoldingToken += 1;
         this.onLog('info', `BACnet frame sent while holding token (frame ${this.frameCount}/${this.maxInfoFrames})`, {
           macAddress: this.macAddress,
-          frameBytes: bacnetFrame.length,
+          frameBytes: item.buffer.length,
+          expectsReply: item.expectsReply,
         });
-        if (this.frameCount >= this.maxInfoFrames || this.bacnetFrameQueue.length === 0) {
+        if (item.expectsReply) {
+          // Keep the token and wait for the peer's reply (Treply bound).
+          this.awaitingReplyUntil = nowMs + this.replyTimeoutMs;
+        } else if (this.frameCount >= this.maxInfoFrames || this.bacnetFrameQueue.length === 0) {
           this.pendingPassToken = true;
         }
-        return bacnetFrame;
+        return item.buffer;
       }
 
       if (this.bacnetFrameQueue.length === 0) {

@@ -1,5 +1,12 @@
 export const BAUD_RATES = [9600, 19200, 38400, 57600, 76800, 115200];
 
+export const TOKEN_PARTICIPATION_MODES = [
+  { value: 'auto', label: 'Auto (default)' },
+  { value: 'listen-only', label: 'Listen Only' },
+  { value: 'join-only', label: 'Join Existing Ring Only' },
+  { value: 'force-sole-master', label: 'Force Sole Master Startup (diagnostics)' },
+];
+
 export const DEFAULT_MSTP = {
   port: '/dev/serial0',
   baudRate: 38400,
@@ -10,12 +17,14 @@ export const DEFAULT_MSTP = {
   timeoutMs: 20000,
   whoIsRetries: 5,
   retryIntervalMs: 3000,
-  tokenMode: false,
+  tokenMode: true,
+  tokenParticipationMode: 'auto',
   directedWhoIsEnabled: false,
   directedWhoIsMacs: '',
   extraDiscoveryRetriesEnabled: false,
-  preListenMs: 1000,
+  preListenMs: 400,
   postSendListenMs: 3000,
+  recentActivityWindowMs: 5000,
 };
 
 export const MSTP_FRAME_TYPE = {
@@ -43,6 +52,54 @@ export function mstpParticipationLabel(status) {
   return MSTP_PARTICIPATION_STATUS_META[status]?.label || status || '—';
 }
 
+export function mstpBusStatus(mstp = {}) {
+  const te = mstp.tokenEngine;
+  const bus = mstp.busAlive;
+  if (te?.soleMasterStartupActive || te?.startupMode === 'sole-master-startup') {
+    return { label: 'Starting Idle Ring', tone: 'warn' };
+  }
+  if (bus?.busAliveRecently || te?.busActivityDetected || te?.busAliveRecently) {
+    return { label: 'Active', tone: 'success' };
+  }
+  if (mstp.open || mstp.discoveryInProgress) {
+    return { label: 'Silent', tone: 'neutral' };
+  }
+  return { label: 'Unknown', tone: 'neutral' };
+}
+
+export function mstpTokenStatus(mstp = {}) {
+  const te = mstp.tokenEngine;
+  if (!te) return { label: 'Not active', tone: 'neutral' };
+  if (te.holdingToken) return { label: 'Holding', tone: 'success' };
+  if (te.state === 'pass-token' || te.participationStatus === 'passing-token') {
+    return { label: 'Passing', tone: 'neutral' };
+  }
+  if (te.tokenRingEstablished || te.startupMode === 'recent-active') {
+    return { label: 'Waiting', tone: 'warn' };
+  }
+  return { label: 'Not active', tone: 'neutral' };
+}
+
+export function mstpContextWarnings(mstp = {}, macActivity = []) {
+  const warnings = [];
+  const te = mstp.tokenEngine;
+  const bus = mstpBusStatus(mstp);
+
+  if (bus.label === 'Silent' && (mstp.open || mstp.discoveryInProgress)) {
+    warnings.push({ tone: 'neutral', text: 'No MS/TP activity detected yet.' });
+  }
+  if (bus.label === 'Starting Idle Ring') {
+    warnings.push({ tone: 'warn', text: 'Sentry is starting the MS/TP ring.' });
+  }
+  if (te?.stats?.duplicateTokens > 0) {
+    warnings.push({ tone: 'danger', text: 'Duplicate token detected on the trunk.' });
+  }
+  if (macActivity.some((entry) => entry.conflict)) {
+    warnings.push({ tone: 'danger', text: 'MAC conflict detected — configured Sentry MAC matches traffic from another station.' });
+  }
+  return warnings;
+}
+
 export function isMstp(device) {
   return device.transport === 'BACnet MS/TP' || device.transport === 'mstp';
 }
@@ -67,6 +124,15 @@ export function formatLastSeen(iso) {
   if (!iso) return '—';
   const diff = Date.now() - new Date(iso).getTime();
   if (diff < 60000) return 'Just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  return formatTime(iso);
+}
+
+export function formatTimeAgo(iso) {
+  if (!iso) return '—';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 5000) return 'Just now';
+  if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
   return formatTime(iso);
 }
@@ -108,8 +174,12 @@ export function validateMstpForm(form, { frames = [], devices = [] } = {}) {
     errors.push('Retry interval must be between 250 ms and less than timeout.');
   }
 
-  if (!form.tokenMode) {
-    warnings.push('Token Mode is off — discovery will broadcast Who-Is without holding the MS/TP token (disruptive). Enable Token Mode for safe bus participation.');
+  if (form.tokenMode === false && (form.tokenParticipationMode || 'auto') === 'auto') {
+    warnings.push('Send-only mode is enabled — Auto Token Mode is recommended for normal discovery.');
+  }
+
+  if (form.tokenParticipationMode === 'force-sole-master') {
+    warnings.push('Force sole-master startup is a diagnostic mode only.');
   }
 
   if (mac === 0) {
@@ -199,4 +269,12 @@ export function computeMacActivity(frames, localMacAddress) {
       conflict: entry.sourceMac === localMacAddress,
     }))
     .sort((a, b) => a.sourceMac - b.sourceMac);
+}
+
+export function buildDiscoverPayload(form) {
+  return {
+    ...form,
+    tokenMode: form.tokenMode !== false,
+    tokenParticipationMode: form.tokenParticipationMode || 'auto',
+  };
 }

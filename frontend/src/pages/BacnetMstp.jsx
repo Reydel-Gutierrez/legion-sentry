@@ -8,43 +8,34 @@ import StatusChip from '../components/common/StatusChip';
 import PageHeader from '../components/common/PageHeader';
 import ActionButton from '../components/common/ActionButton';
 import DataTable from '../components/common/DataTable';
-import FormSection from '../components/common/FormSection';
 import CollapsibleSection from '../components/common/CollapsibleSection';
 import LoadingState from '../components/common/LoadingState';
 import {
   BAUD_RATES,
   DEFAULT_MSTP,
-  MSTP_STATUS_META,
+  TOKEN_PARTICIPATION_MODES,
+  buildDiscoverPayload,
   computeMacActivity,
   computeScanSummary,
   formatLastSeen,
   formatTime,
+  formatTimeAgo,
   isMstp,
+  mstpBusStatus,
+  mstpContextWarnings,
   mstpMac,
   mstpNetwork,
   mstpParticipationLabel,
+  mstpTokenStatus,
   MSTP_PARTICIPATION_STATUS_META,
   validateMstpForm,
 } from './bacnetUtils';
 
-function mstpStatusChip(device) {
-  const meta = MSTP_STATUS_META[device.mstpStatus] || MSTP_STATUS_META.never_confirmed;
-  const title = device.mstpStatus === 'stale'
-    ? 'Known inventory device, but it did not answer the latest Who-Is scan.'
-    : undefined;
-  return <StatusChip tone={meta.tone} label={meta.label} title={title} />;
-}
-
-function crcChip(valid) {
-  if (valid == null) return <span className="mono" style={{ color: '#58677d' }}>—</span>;
-  return valid
-    ? <StatusChip tone="success" label="OK" />
-    : <StatusChip tone="danger" label="FAIL" />;
-}
-
-function NumberField({ label, value, onChange, disabled }) {
+function CompactNumberField({
+  label, value, onChange, disabled, hint, width = 'sm',
+}) {
   return (
-    <div className="field-group">
+    <div className={`field-group field-group--${width}`}>
       <label className="form-label">{label}</label>
       <input
         className="form-control"
@@ -53,6 +44,16 @@ function NumberField({ label, value, onChange, disabled }) {
         disabled={disabled}
         onChange={onChange}
       />
+      {hint && <p className="field-hint mb-0">{hint}</p>}
+    </div>
+  );
+}
+
+function StatusItem({ label, children }) {
+  return (
+    <div className="mstp-status-item">
+      <span className="mstp-status-label">{label}</span>
+      <div>{children}</div>
     </div>
   );
 }
@@ -100,7 +101,8 @@ export default function BacnetMstpPage() {
       timeoutMs: activeStatus?.timeoutMs ?? savedConfig.timeoutMs ?? DEFAULT_MSTP.timeoutMs,
       whoIsRetries: activeStatus?.whoIsRetries ?? savedConfig.whoIsRetries ?? DEFAULT_MSTP.whoIsRetries,
       retryIntervalMs: activeStatus?.retryIntervalMs ?? savedConfig.retryIntervalMs ?? DEFAULT_MSTP.retryIntervalMs,
-      tokenMode: activeStatus?.tokenMode ?? savedConfig.tokenMode ?? DEFAULT_MSTP.tokenMode,
+      tokenMode: savedConfig.tokenMode !== false,
+      tokenParticipationMode: savedConfig.tokenParticipationMode ?? DEFAULT_MSTP.tokenParticipationMode,
       directedWhoIsEnabled: savedConfig.directedWhoIsEnabled ?? DEFAULT_MSTP.directedWhoIsEnabled,
       directedWhoIsMacs: savedConfig.directedWhoIsMacs ?? DEFAULT_MSTP.directedWhoIsMacs,
       extraDiscoveryRetriesEnabled: savedConfig.extraDiscoveryRetriesEnabled
@@ -108,6 +110,7 @@ export default function BacnetMstpPage() {
         ?? DEFAULT_MSTP.extraDiscoveryRetriesEnabled,
       preListenMs: savedConfig.preListenMs ?? DEFAULT_MSTP.preListenMs,
       postSendListenMs: savedConfig.postSendListenMs ?? DEFAULT_MSTP.postSendListenMs,
+      recentActivityWindowMs: savedConfig.recentActivityWindowMs ?? DEFAULT_MSTP.recentActivityWindowMs,
     });
     setStatusLoaded(true);
   }, []);
@@ -175,12 +178,14 @@ export default function BacnetMstpPage() {
           timeoutMs: mstpForm.timeoutMs,
           whoIsRetries: mstpForm.whoIsRetries,
           retryIntervalMs: mstpForm.retryIntervalMs,
-          tokenMode: mstpForm.tokenMode,
+          tokenMode: mstpForm.tokenMode !== false,
+          tokenParticipationMode: mstpForm.tokenParticipationMode,
           directedWhoIsEnabled: mstpForm.directedWhoIsEnabled,
           directedWhoIsMacs: mstpForm.directedWhoIsMacs,
           extraDiscoveryRetriesEnabled: mstpForm.extraDiscoveryRetriesEnabled,
           preListenMs: mstpForm.preListenMs,
           postSendListenMs: mstpForm.postSendListenMs,
+          recentActivityWindowMs: mstpForm.recentActivityWindowMs,
         },
       });
       await load();
@@ -188,23 +193,6 @@ export default function BacnetMstpPage() {
         ? ` ${validation.warnings.join(' ')}`
         : '';
       setMessage({ type: 'success', text: `MS/TP configuration saved.${saveWarnings}` });
-    } catch (err) {
-      setMessage({ type: 'error', text: err.message });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleOpenMstp = async () => {
-    const validation = runMstpValidation();
-    if (!confirmMstpAction(validation)) return;
-
-    setLoading(true);
-    setMessage(null);
-    try {
-      await api.openBacnetMstp(mstpForm);
-      await load();
-      setMessage({ type: 'success', text: `MS/TP interface opened on ${mstpForm.port}.` });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -235,14 +223,14 @@ export default function BacnetMstpPage() {
       setMessage(null);
     }
     try {
-      const result = await api.discoverBacnetMstp({ ...mstpForm });
+      const result = await api.discoverBacnetMstp(buildDiscoverPayload(mstpForm));
       await load();
       const seen = result.devices?.length ?? 0;
       const missed = result.missedDevices || [];
       const totalInventory = result.inventoryTotals?.mstp ?? '—';
       setMissedDevices(missed);
       const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : '';
-      const summaryText = `BACnet MS/TP discovery complete — ${seen} seen, ${missed.length} not rediscovered, ${totalInventory} total inventory, completed in ${result.durationMs}ms.`;
+      const summaryText = `Discovery complete — ${seen} device(s) seen, ${missed.length} not rediscovered, ${totalInventory} in inventory (${result.durationMs}ms).`;
       setMessage({
         type: seen > 0 ? 'success' : 'info',
         text: `${summaryText}${warningText}`,
@@ -312,7 +300,7 @@ export default function BacnetMstpPage() {
   };
 
   if (!statusLoaded) {
-    return <LoadingState message="Loading BACnet MS/TP configuration…" />;
+    return <LoadingState message="Loading BACnet MS/TP…" />;
   }
 
   const mstp = mstpStatus || {};
@@ -320,19 +308,19 @@ export default function BacnetMstpPage() {
   const scanSummary = computeScanSummary(frames);
   const macActivity = computeMacActivity(frames, mstpForm.macAddress);
   const mstpDevices = devices.filter(isMstp);
+  const busStatus = mstpBusStatus(mstp);
+  const tokenStatus = mstpTokenStatus(mstp);
+  const contextWarnings = mstpContextWarnings(mstp, macActivity);
+  const te = mstp.tokenEngine;
+  const lastFrameAt = te?.lastValidFrameAt || mstp.busAlive?.lastValidFrameAt || mstp.lastActivityAt;
 
   const deviceColumns = [
-    { key: 'status', header: 'Status', render: (d) => mstpStatusChip(d) },
-    { key: 'network', header: 'Network', render: (d) => mstpNetwork(d) },
-    { key: 'mac', header: 'MS/TP MAC', cellClassName: 'mono', render: (d) => mstpMac(d) },
-    { key: 'deviceInstance', header: 'Instance' },
-    { key: 'objectName', header: 'Object Name', render: (d) => d.objectName || '—' },
+    { key: 'mac', header: 'MAC', cellClassName: 'mono', render: (d) => mstpMac(d) },
+    { key: 'deviceInstance', header: 'Instance', cellClassName: 'mono' },
     { key: 'vendor', header: 'Vendor', render: (d) => d.vendor || d.vendorName || '—' },
     { key: 'model', header: 'Model', render: (d) => d.model || d.modelName || '—' },
-    { key: 'firstSeen', header: 'First Seen', render: (d) => formatLastSeen(d.firstSeenAt) },
+    { key: 'network', header: 'Address', render: (d) => mstpNetwork(d) },
     { key: 'lastSeen', header: 'Last Seen', render: (d) => formatLastSeen(d.lastSeen || d.lastSeenAt) },
-    { key: 'sightings', header: 'Sightings', render: (d) => d.sightings ?? '—' },
-    { key: 'missed', header: 'Missed', render: (d) => d.missedScans ?? 0 },
     {
       key: 'actions',
       header: '',
@@ -347,86 +335,35 @@ export default function BacnetMstpPage() {
             size="sm"
             onClick={() => handleAddManaged(device)}
             disabled={loading || managedKeys.has(managedKey(device))}
-            title={managedKeys.has(managedKey(device)) ? 'Already managed' : 'Promote to managed devices'}
+            title={managedKeys.has(managedKey(device)) ? 'Already managed' : 'Add to managed devices'}
           >
-            {managedKeys.has(managedKey(device)) ? 'Managed' : 'Add to Managed'}
+            {managedKeys.has(managedKey(device)) ? 'Managed' : 'Add'}
           </ActionButton>
         </div>
       ),
     },
   ];
 
-  const missedColumns = [
-    { key: 'mac', header: 'MAC', cellClassName: 'mono', render: (m) => m.mstpMacAddress ?? '—' },
-    { key: 'deviceInstance', header: 'Device Instance' },
-    { key: 'lastSeen', header: 'Last Seen', render: (m) => formatLastSeen(m.lastSeenAt) },
-    { key: 'missedScans', header: 'Missed Scans' },
-  ];
-
   const logColumns = [
     { key: 'time', header: 'Time', render: (e) => formatTime(e.time) },
     { key: 'level', header: 'Level' },
-    { key: 'source', header: 'Source' },
     { key: 'message', header: 'Message' },
-  ];
-
-  const macColumns = [
-    { key: 'sourceMac', header: 'Source MAC', cellClassName: 'mono' },
-    { key: 'frameCount', header: 'Frame Count' },
-    { key: 'lastSeen', header: 'Last Seen', render: (e) => formatTime(e.lastSeen) },
-    { key: 'frameTypesSeen', header: 'Frame Types Seen' },
-    {
-      key: 'conflict',
-      header: '',
-      align: 'right',
-      render: (e) => (e.conflict
-        ? <StatusChip tone="danger" label="MAC Conflict" title="Matches configured local MAC" />
-        : null),
-    },
   ];
 
   const frameColumns = [
     { key: 'timestamp', header: 'Time', render: (f) => formatTime(f.timestamp) },
-    {
-      key: 'session',
-      header: 'Session',
-      cellClassName: 'mono',
-      render: (f) => (f.discoverySessionId ? f.discoverySessionId.slice(0, 8) : '—'),
-    },
     { key: 'sourceMac', header: 'Src', cellClassName: 'mono', render: (f) => f.sourceMac ?? '—' },
     { key: 'destinationMac', header: 'Dst', cellClassName: 'mono', render: (f) => f.destinationMac ?? '—' },
-    { key: 'frameType', header: 'Frame Type', render: (f) => f.frameTypeLabel || f.frameType },
-    { key: 'length', header: 'Len' },
-    { key: 'hdrCrc', header: 'Hdr CRC', render: (f) => crcChip(f.headerCrcValid) },
-    { key: 'dataCrc', header: 'Data CRC', render: (f) => crcChip(f.dataCrcValid) },
-    { key: 'parseResult', header: 'Parse Result', render: (f) => f.parseResult || '—' },
-    {
-      key: 'parseError',
-      header: 'Parse Error',
-      render: (f) => (
-        <span style={{ color: f.parseError ? '#fa5252' : undefined }}>{f.parseError || '—'}</span>
-      ),
-    },
-    { key: 'mstpState', header: 'MS/TP State', render: (f) => f.mstpState || '—' },
-    { key: 'tokenEvent', header: 'Token Event', render: (f) => f.tokenEvent || '—' },
-    {
-      key: 'payload',
-      header: 'Payload (first 32 bytes)',
-      cellClassName: 'mono',
-      render: (f) => f.payloadHex || '—',
-    },
+    { key: 'frameType', header: 'Type', render: (f) => f.frameTypeLabel || f.frameType },
+    { key: 'parseResult', header: 'Parse', render: (f) => f.parseResult || '—' },
+    { key: 'mstpState', header: 'State', render: (f) => f.mstpState || '—' },
   ];
 
   return (
     <>
       <PageHeader
         title="BACnet MS/TP"
-        subtitle="Serial interface, token participation and MS/TP discovery."
-        actions={(
-          <ActionButton variant="primary" onClick={handleDiscoverMstp} disabled={loading}>
-            Discover BACnet MS/TP
-          </ActionButton>
-        )}
+        subtitle="Discover devices on the FC Bus. Sentry joins an active ring or starts an idle ring automatically."
       />
 
       {message && (
@@ -435,88 +372,206 @@ export default function BacnetMstpPage() {
         </div>
       )}
 
+      {contextWarnings.map((w) => (
+        <div key={w.text} className={`alert-sentry alert-sentry-${w.tone === 'danger' ? 'error' : w.tone === 'warn' ? 'info' : 'info'} mb-3`}>
+          {w.text}
+        </div>
+      ))}
+
+      <SectionCard title="Status Summary" className="mb-3">
+        <div className="mstp-status-grid">
+          <StatusItem label="Interface">
+            <StatusChip label={interfaceOpen ? 'Open' : 'Closed'} tone={interfaceOpen ? 'success' : 'neutral'} />
+          </StatusItem>
+          <StatusItem label="Bus">
+            <StatusChip tone={busStatus.tone} label={busStatus.label} />
+          </StatusItem>
+          <StatusItem label="Token">
+            <StatusChip tone={tokenStatus.tone} label={tokenStatus.label} />
+          </StatusItem>
+          <StatusItem label="Last Frame">
+            <span>{formatTimeAgo(lastFrameAt)}</span>
+          </StatusItem>
+          <StatusItem label="Local MAC">
+            <span className="mono">{mstp.macAddress ?? mstpForm.macAddress}</span>
+          </StatusItem>
+          <StatusItem label="Masters Detected">
+            <span>{te?.mastersDetected?.length ?? 0}</span>
+          </StatusItem>
+        </div>
+        {te && (
+          <div className="mt-3 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+            <StatusChip
+              tone={MSTP_PARTICIPATION_STATUS_META[te.participationStatus]?.tone || 'neutral'}
+              label={mstpParticipationLabel(te.participationStatus)}
+            />
+            <span className="text-muted ms-2" style={{ fontSize: '0.85rem' }}>
+              Auto Token Mode — pre-listen, join active ring, or start idle ring
+            </span>
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Discover Devices" className="mb-3">
+        <p className="text-muted mb-3">
+          Sentry will join an active MS/TP ring or start an idle ring automatically. Who-Is is sent only while holding the token.
+        </p>
+        <div className="action-bar">
+          <ActionButton variant="primary" onClick={handleDiscoverMstp} disabled={loading}>
+            Discover Devices
+          </ActionButton>
+          <ActionButton onClick={() => load()} disabled={loading}>
+            Refresh Status
+          </ActionButton>
+          {interfaceOpen && (
+            <ActionButton size="sm" onClick={handleCloseMstp} disabled={loading}>
+              Close Interface
+            </ActionButton>
+          )}
+        </div>
+      </SectionCard>
+
       <SectionCard
-        title="MS/TP Interface"
-        status={<StatusChip label={interfaceOpen ? 'Open' : 'Closed'} />}
+        title="Basic MS/TP Settings"
+        status={<StatusChip label={interfaceOpen ? 'Interface open' : 'Ready'} />}
         className="mb-3"
       >
-        <FormSection title="Serial Interface">
-          <div className="form-grid form-grid--2">
-            <div className="field-group">
-              <label className="form-label">Port</label>
-              <input
-                className="form-control"
-                value={mstpForm.port}
-                onChange={(e) => updateMstp('port', e.target.value)}
-                disabled={interfaceOpen}
-              />
-            </div>
-            <div className="field-group">
-              <label className="form-label">Baud Rate</label>
-              <select
-                className="form-select"
-                value={mstpForm.baudRate}
-                onChange={(e) => updateMstp('baudRate', Number(e.target.value))}
-                disabled={interfaceOpen}
-              >
-                {BAUD_RATES.map((rate) => (
-                  <option key={rate} value={rate}>{rate}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </FormSection>
-
-        <FormSection title="BACnet Identity">
-          <div className="form-grid">
-            <NumberField label="MAC Address" value={mstpForm.macAddress} disabled={interfaceOpen} onChange={(e) => updateMstp('macAddress', Number(e.target.value))} />
-            <NumberField label="Max Master" value={mstpForm.maxMaster} disabled={interfaceOpen} onChange={(e) => updateMstp('maxMaster', Number(e.target.value))} />
-            <NumberField label="Max Info Frames" value={mstpForm.maxInfoFrames} disabled={interfaceOpen} onChange={(e) => updateMstp('maxInfoFrames', Number(e.target.value))} />
-            <NumberField label="Network Number" value={mstpForm.networkNumber} disabled={interfaceOpen} onChange={(e) => updateMstp('networkNumber', Number(e.target.value))} />
-          </div>
-        </FormSection>
-
-        <FormSection title="Token Participation">
-          <Form.Check
-            type="checkbox"
-            id="mstp-token-mode"
-            label="Token Mode (pre-listen, join active ring, or start idle ring — Who-Is only while holding token)"
-            checked={Boolean(mstpForm.tokenMode)}
-            onChange={(e) => updateMstp('tokenMode', e.target.checked)}
-          />
-        </FormSection>
-
-        <FormSection>
-          <CollapsibleSection title="Advanced Settings">
-            <div className="form-section-title">Discovery Timing</div>
-            <div className="form-grid form-grid--3 mb-3">
-              <NumberField label="Timeout (ms)" value={mstpForm.timeoutMs} onChange={(e) => updateMstp('timeoutMs', Number(e.target.value))} />
-              <NumberField label="Who-Is Retries" value={mstpForm.whoIsRetries} onChange={(e) => updateMstp('whoIsRetries', Number(e.target.value))} />
-              <NumberField label="Retry Interval (ms)" value={mstpForm.retryIntervalMs} onChange={(e) => updateMstp('retryIntervalMs', Number(e.target.value))} />
-              <NumberField label="Pre-listen Delay (ms)" value={mstpForm.preListenMs} onChange={(e) => updateMstp('preListenMs', Number(e.target.value))} />
-              <NumberField label="Post-send Listen (ms)" value={mstpForm.postSendListenMs} onChange={(e) => updateMstp('postSendListenMs', Number(e.target.value))} />
-            </div>
-
-            <div className="form-section-title">Advanced Discovery</div>
-            <Form.Check
-              type="checkbox"
-              id="mstp-extended-discovery-retries"
-              className="mb-2"
-              label="Extended discovery retries"
-              checked={Boolean(mstpForm.extraDiscoveryRetriesEnabled)}
-              onChange={(e) => updateMstp('extraDiscoveryRetriesEnabled', e.target.checked)}
+        <div className="form-grid form-grid--2 mb-3">
+          <div className="field-group field-group--lg">
+            <label className="form-label">Serial Port</label>
+            <input
+              className="form-control"
+              value={mstpForm.port}
+              onChange={(e) => updateMstp('port', e.target.value)}
+              disabled={interfaceOpen}
             />
+          </div>
+          <div className="field-group field-group--md">
+            <label className="form-label">Baud Rate</label>
+            <select
+              className="form-select"
+              value={mstpForm.baudRate}
+              onChange={(e) => updateMstp('baudRate', Number(e.target.value))}
+              disabled={interfaceOpen}
+            >
+              {BAUD_RATES.map((rate) => (
+                <option key={rate} value={rate}>{rate}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="form-grid form-grid--4 mb-3">
+          <CompactNumberField
+            label="Sentry MAC Address"
+            value={mstpForm.macAddress}
+            disabled={interfaceOpen}
+            width="xs"
+            hint="Sentry's MS/TP master MAC. Must be unique on the trunk."
+            onChange={(e) => updateMstp('macAddress', Number(e.target.value))}
+          />
+          <CompactNumberField
+            label="Max Master"
+            value={mstpForm.maxMaster}
+            disabled={interfaceOpen}
+            width="xs"
+            hint="Highest master MAC to search for. 127 is safest; lower is faster if known."
+            onChange={(e) => updateMstp('maxMaster', Number(e.target.value))}
+          />
+          <CompactNumberField
+            label="Network Number"
+            value={mstpForm.networkNumber}
+            disabled={interfaceOpen}
+            width="sm"
+            onChange={(e) => updateMstp('networkNumber', Number(e.target.value))}
+          />
+          <CompactNumberField
+            label="Timeout (ms)"
+            value={mstpForm.timeoutMs}
+            width="md"
+            onChange={(e) => updateMstp('timeoutMs', Number(e.target.value))}
+          />
+        </div>
+
+        <p className="field-hint mb-3">
+          Auto Token Mode: Sentry will join an active ring or start an idle ring automatically.
+        </p>
+
+        <div className="action-bar">
+          <ActionButton onClick={handleSaveMstpConfig} disabled={loading}>
+            Save Settings
+          </ActionButton>
+          <ActionButton onClick={handleClearSession} disabled={loading}>
+            Clear Latest Scan
+          </ActionButton>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Discovered Devices" className="mb-3">
+        <DataTable
+          columns={deviceColumns}
+          rows={mstpDevices}
+          rowKey={(d) => d.id}
+          pageSize={10}
+          emptyMessage="No MS/TP devices discovered yet. Click Discover Devices."
+        />
+      </SectionCard>
+
+      <SectionCard title="Advanced Diagnostics" className="mb-3">
+        <CollapsibleSection title="Token Engine, Timing & Manual Modes" defaultOpen={false}>
+          <div className="p-3">
+            <div className="form-section-title">Auto Token Mode</div>
+            <p className="field-hint mb-3">
+              Pre-listen, join active ring, or start idle ring. Who-Is is sent only while holding token.
+            </p>
+
+            <div className="form-grid form-grid--2 mb-3">
+              <div className="field-group">
+                <label className="form-label">Participation Override</label>
+                <select
+                  className="form-select"
+                  value={mstpForm.tokenParticipationMode}
+                  onChange={(e) => updateMstp('tokenParticipationMode', e.target.value)}
+                >
+                  {TOKEN_PARTICIPATION_MODES.map((mode) => (
+                    <option key={mode.value} value={mode.value}>{mode.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field-group">
+                <Form.Check
+                  type="checkbox"
+                  id="mstp-send-only"
+                  className="mt-4"
+                  label="Send-only mode (disable Auto Token Mode — diagnostic only)"
+                  checked={mstpForm.tokenMode === false}
+                  onChange={(e) => updateMstp('tokenMode', !e.target.checked)}
+                />
+              </div>
+            </div>
+
+            <div className="form-section-title">Discovery Timing</div>
+            <div className="form-grid form-grid--4 mb-3">
+              <CompactNumberField label="Pre-listen (ms)" value={mstpForm.preListenMs} width="sm" onChange={(e) => updateMstp('preListenMs', Number(e.target.value))} />
+              <CompactNumberField label="Post-send Listen (ms)" value={mstpForm.postSendListenMs} width="sm" onChange={(e) => updateMstp('postSendListenMs', Number(e.target.value))} />
+              <CompactNumberField label="Who-Is Retries" value={mstpForm.whoIsRetries} width="xs" onChange={(e) => updateMstp('whoIsRetries', Number(e.target.value))} />
+              <CompactNumberField label="Retry Interval (ms)" value={mstpForm.retryIntervalMs} width="sm" onChange={(e) => updateMstp('retryIntervalMs', Number(e.target.value))} />
+              <CompactNumberField label="Recent Activity Window (ms)" value={mstpForm.recentActivityWindowMs} width="sm" onChange={(e) => updateMstp('recentActivityWindowMs', Number(e.target.value))} />
+              <CompactNumberField label="Max Info Frames" value={mstpForm.maxInfoFrames} width="xs" disabled={interfaceOpen} onChange={(e) => updateMstp('maxInfoFrames', Number(e.target.value))} />
+            </div>
+
+            <div className="form-section-title">Directed Who-Is</div>
             <Form.Check
               type="checkbox"
               id="mstp-directed-whois"
               className="mb-2"
-              label="Directed Who-Is"
+              label="Directed Who-Is (not fully implemented)"
               checked={Boolean(mstpForm.directedWhoIsEnabled)}
               onChange={(e) => updateMstp('directedWhoIsEnabled', e.target.checked)}
             />
             {mstpForm.directedWhoIsEnabled && (
-              <div className="field-group" style={{ maxWidth: '320px' }}>
-                <label className="form-label">Directed Who-Is MACs (comma separated)</label>
+              <div className="field-group field-group--md mb-3">
+                <label className="form-label">Directed Who-Is MACs</label>
                 <input
                   className="form-control"
                   value={mstpForm.directedWhoIsMacs}
@@ -525,146 +580,72 @@ export default function BacnetMstpPage() {
                 />
               </div>
             )}
-          </CollapsibleSection>
-        </FormSection>
 
-        <div className="action-bar mt-3">
-          <ActionButton onClick={handleSaveMstpConfig} disabled={loading}>
-            Save Config
-          </ActionButton>
-          <ActionButton onClick={handleOpenMstp} disabled={loading || interfaceOpen}>
-            Open Interface
-          </ActionButton>
-          <ActionButton onClick={handleCloseMstp} disabled={loading || !interfaceOpen}>
-            Close Interface
-          </ActionButton>
-          <ActionButton onClick={handleClearSession} disabled={loading}>
-            Clear Latest Scan
-          </ActionButton>
-          <ActionButton onClick={handleClearLogs} disabled={loading}>
-            Clear Logs
-          </ActionButton>
-        </div>
+            <Form.Check
+              type="checkbox"
+              id="mstp-extended-discovery-retries"
+              className="mb-3"
+              label="Extended discovery retries"
+              checked={Boolean(mstpForm.extraDiscoveryRetriesEnabled)}
+              onChange={(e) => updateMstp('extraDiscoveryRetriesEnabled', e.target.checked)}
+            />
+
+            {te && (
+              <div className="status-readout mb-3">
+                <KvRow label="Startup Mode" value={te.startupMode || '—'} />
+                <KvRow label="Token Ring Established" value={te.tokenRingEstablished ? 'Yes' : 'No'} />
+                <KvRow label="Sole Master Startup" value={te.soleMasterStartupActive ? 'Active' : 'No'} />
+                <KvRow label="Operating as Sole Master" value={te.operatingAsSoleMaster ? 'Yes' : 'No'} />
+                <KvRow label="Last Poll For Master" value={te.lastPollForMasterMac ?? '—'} />
+                <KvRow label="Engine State" value={`${te.state}${te.holdingToken ? ' (holding)' : ''}`} />
+                <KvRow label="RX / TX Bytes" value={`${mstp.rxBytes ?? 0} / ${mstp.txBytes ?? 0}`} />
+              </div>
+            )}
+
+            {frames.length > 0 && (
+              <>
+                <div className="form-section-title">Scan Summary</div>
+                <div className="status-readout mb-3">
+                  <KvRow label="Total Frames" value={scanSummary.totalFrames} />
+                  <KvRow label="Token Frames" value={scanSummary.tokenFrames} />
+                  <KvRow label="Poll For Master" value={scanSummary.pollForMasterFrames} />
+                  <KvRow label="Unique Source MACs" value={scanSummary.uniqueSourceMacs} />
+                  <KvRow label="Header CRC Failures" value={scanSummary.headerCrcFailures} />
+                </div>
+              </>
+            )}
+          </div>
+        </CollapsibleSection>
       </SectionCard>
 
-      <SectionCard title="Interface Status" className="mb-3">
-        <KvRow
-          label="Interface"
-          value={<StatusChip label={interfaceOpen ? 'Open' : 'Closed'} />}
-        />
-        <KvRow label="RX Bytes" value={mstp.rxBytes ?? 0} />
-        <KvRow label="TX Bytes" value={mstp.txBytes ?? 0} />
-        <KvRow label="Token Mode" value={mstp.tokenMode ? 'Enabled' : 'Disabled'} />
-        <KvRow
-          label="Token Participation"
-          value={mstp.tokenParticipationImplemented ? 'Sole-master startup supported' : 'Not implemented'}
-        />
-        {mstp.tokenEngine && (
-          <>
-            <KvRow
-              label="Ring Participation"
-              value={(
-                <StatusChip
-                  tone={MSTP_PARTICIPATION_STATUS_META[mstp.tokenEngine.participationStatus]?.tone || 'neutral'}
-                  label={mstpParticipationLabel(mstp.tokenEngine.participationStatus)}
-                />
-              )}
+      <SectionCard title="Logs & Raw Frames" className="mb-3">
+        <CollapsibleSection title="Discovery Log" defaultOpen={false}>
+          <div className="p-2">
+            <div className="action-bar mb-2">
+              <ActionButton size="sm" onClick={handleClearLogs} disabled={loading}>
+                Clear Logs
+              </ActionButton>
+            </div>
+            <DataTable
+              columns={logColumns}
+              rows={logs}
+              rowKey={(e, i) => `${e.time}-${i}`}
+              pageSize={8}
+              emptyMessage="No discovery logs yet."
             />
-            <KvRow label="Startup Mode" value={mstp.tokenEngine.startupMode || '—'} />
-            <KvRow
-              label="Bus Activity Detected"
-              value={mstp.tokenEngine.busActivityDetected ? 'Yes' : 'No'}
+          </div>
+        </CollapsibleSection>
+
+        <CollapsibleSection title="Raw MS/TP Frames" defaultOpen={false}>
+          <div className="p-2">
+            <DataTable
+              columns={frameColumns}
+              rows={frames}
+              rowKey={(f, i) => `${f.timestamp}-${i}`}
+              pageSize={8}
+              emptyMessage="No frames captured yet."
             />
-            <KvRow
-              label="Sole-Master Startup"
-              value={mstp.tokenEngine.soleMasterStartupActive ? 'Active' : 'No'}
-            />
-            <KvRow
-              label="Token Ring Established"
-              value={mstp.tokenEngine.tokenRingEstablished ? 'Yes' : 'No'}
-            />
-            <KvRow
-              label="Last Poll For Master"
-              value={mstp.tokenEngine.lastPollForMasterMac ?? '—'}
-            />
-            <KvRow
-              label="Token Engine State"
-              value={`${mstp.tokenEngine.state}${mstp.tokenEngine.holdingToken ? ' (holding)' : ''}`}
-            />
-          </>
-        )}
-        <KvRow label="Last Activity" value={formatTime(mstp.lastActivityAt)} />
-        <KvRow label="Last Error" value={mstp.lastError || '—'} />
-      </SectionCard>
-
-      <SectionCard title="Discovered MS/TP Devices" className="mb-3">
-        <DataTable
-          columns={deviceColumns}
-          rows={mstpDevices}
-          rowKey={(d) => d.id}
-          pageSize={10}
-          emptyMessage="No MS/TP devices discovered yet. Run BACnet MS/TP discovery."
-        />
-      </SectionCard>
-
-      {missedDevices.length > 0 && (
-        <SectionCard title="Missed Devices" className="mb-3">
-          <DataTable
-            columns={missedColumns}
-            rows={missedDevices}
-            rowKey={(m) => `${m.mstpMacAddress}-${m.deviceInstance}`}
-            pageSize={10}
-            emptyMessage="No missed devices."
-          />
-        </SectionCard>
-      )}
-
-      <SectionCard title="Discovery Log" className="mb-3">
-        <DataTable
-          columns={logColumns}
-          rows={logs}
-          rowKey={(e, i) => `${e.time}-${i}`}
-          pageSize={10}
-          emptyMessage="No discovery logs yet."
-        />
-      </SectionCard>
-
-      <SectionCard title="Scan Summary" className="mb-3">
-        {frames.length === 0 ? (
-          <p className="text-muted mb-0">No frames captured yet. Run an MS/TP discovery.</p>
-        ) : (
-          <>
-            <KvRow label="Total Frames" value={scanSummary.totalFrames} />
-            <KvRow label="Header CRC Failures" value={scanSummary.headerCrcFailures} />
-            <KvRow label="Data CRC Failures" value={scanSummary.dataCrcFailures} />
-            <KvRow label="Parse Errors" value={scanSummary.parseErrors} />
-            <KvRow label="Unique Source MACs" value={scanSummary.uniqueSourceMacs} />
-            <KvRow label="Token Frames" value={scanSummary.tokenFrames} />
-            <KvRow label="Poll For Master Frames" value={scanSummary.pollForMasterFrames} />
-            <KvRow label="Reply To Poll For Master Frames" value={scanSummary.replyToPollForMasterFrames} />
-          </>
-        )}
-      </SectionCard>
-
-      <SectionCard title="Known MAC Activity" className="mb-3">
-        <DataTable
-          columns={macColumns}
-          rows={macActivity}
-          rowKey={(e) => e.sourceMac}
-          pageSize={10}
-          emptyMessage="No source MAC activity recorded yet."
-        />
-      </SectionCard>
-
-      <SectionCard title="Frame Diagnostics">
-        <CollapsibleSection title="MS/TP Frame Diagnostics">
-          <DataTable
-            columns={frameColumns}
-            rows={frames}
-            rowKey={(f, i) => `${f.timestamp}-${i}`}
-            pageSize={10}
-            emptyMessage="No frames captured yet. Run an MS/TP discovery."
-          />
+          </div>
         </CollapsibleSection>
       </SectionCard>
     </>

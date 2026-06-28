@@ -11,7 +11,7 @@ const {
   verifyHeaderCrc,
   verifyDataCrc,
 } = require('./mstpCrc');
-const { MstpTokenEngine } = require('./mstpTokenEngine');
+const { MstpTokenEngine, isValidMstpActivityFrame, PARTICIPATION_MODE } = require('./mstpTokenEngine');
 const bacnetApdu = require('./bacnetApduCodec');
 
 const MSTP_FRAME_TYPE = {
@@ -33,12 +33,56 @@ const MAX_FRAME_DIAGNOSTICS = 300;
 const DEFAULT_TIMEOUT_MS = 20000;
 const DEFAULT_WHO_IS_RETRIES = 5;
 const DEFAULT_RETRY_INTERVAL_MS = 3000;
-const DEFAULT_PRE_LISTEN_MS = 1000;
+const DEFAULT_PRE_LISTEN_MS = 400;
 const DEFAULT_POST_SEND_LISTEN_MS = 3000;
+const DEFAULT_RECENT_ACTIVITY_WINDOW_MS = 5000;
 const TOKEN_PARTICIPATION_IMPLEMENTED = true;
 // Directed (unicast) MS/TP Who-Is is not correctly supported yet: it requires
 // genuine token participation to address a specific master. We never fake it.
 const DIRECTED_WHO_IS_IMPLEMENTED = false;
+
+const busAliveCache = {
+  lastValidFrameAt: null,
+  recentActivityWindowMs: DEFAULT_RECENT_ACTIVITY_WINDOW_MS,
+};
+
+function recordBusAliveFrame(frame) {
+  if (!isValidMstpActivityFrame(frame)) return;
+  busAliveCache.lastValidFrameAt = Date.now();
+}
+
+function isBusAliveRecently(nowMs = Date.now()) {
+  if (!busAliveCache.lastValidFrameAt) return false;
+  return nowMs - busAliveCache.lastValidFrameAt <= busAliveCache.recentActivityWindowMs;
+}
+
+function getBusAliveSnapshot() {
+  return {
+    lastValidFrameAt: busAliveCache.lastValidFrameAt
+      ? new Date(busAliveCache.lastValidFrameAt).toISOString()
+      : null,
+    busAliveRecently: isBusAliveRecently(),
+    recentActivityWindowMs: busAliveCache.recentActivityWindowMs,
+  };
+}
+
+function normalizeTokenParticipationMode(value) {
+  const mode = String(value || PARTICIPATION_MODE.AUTO).toLowerCase();
+  if (Object.values(PARTICIPATION_MODE).includes(mode)) {
+    return mode;
+  }
+  return PARTICIPATION_MODE.AUTO;
+}
+
+function resolveUseTokenMode(config) {
+  if (config.tokenParticipationMode === PARTICIPATION_MODE.LISTEN_ONLY) {
+    return true;
+  }
+  if (config.tokenMode === false && config.tokenParticipationMode === PARTICIPATION_MODE.AUTO) {
+    return false;
+  }
+  return config.tokenMode !== false;
+}
 
 function parseMacList(value) {
   if (Array.isArray(value)) {
@@ -65,7 +109,7 @@ const interfaceState = {
   timeoutMs: null,
   whoIsRetries: null,
   retryIntervalMs: null,
-  tokenMode: false,
+  tokenMode: true,
   rxBytes: 0,
   txBytes: 0,
   lastActivityAt: null,
@@ -149,12 +193,16 @@ function getDefaultConfig() {
     timeoutMs: settings.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     whoIsRetries: settings.whoIsRetries ?? DEFAULT_WHO_IS_RETRIES,
     retryIntervalMs: settings.retryIntervalMs ?? DEFAULT_RETRY_INTERVAL_MS,
-    tokenMode: Boolean(settings.tokenMode),
+    tokenMode: settings.tokenMode !== false,
+    tokenParticipationMode: normalizeTokenParticipationMode(
+      settings.tokenParticipationMode ?? settings.tokenModeOverride,
+    ),
     directedWhoIsEnabled: Boolean(settings.directedWhoIsEnabled),
     directedWhoIsMacs: settings.directedWhoIsMacs ?? '',
     extraDiscoveryRetriesEnabled: readExtendedDiscoveryRetriesEnabled(settings),
     preListenMs: settings.preListenMs ?? settings.initialSilenceMs ?? DEFAULT_PRE_LISTEN_MS,
     postSendListenMs: settings.postSendListenMs ?? DEFAULT_POST_SEND_LISTEN_MS,
+    recentActivityWindowMs: settings.recentActivityWindowMs ?? DEFAULT_RECENT_ACTIVITY_WINDOW_MS,
   };
 }
 
@@ -170,7 +218,10 @@ function normalizeConfig(input = {}) {
     timeoutMs: Number(input.timeoutMs ?? defaults.timeoutMs),
     whoIsRetries: Number(input.whoIsRetries ?? defaults.whoIsRetries),
     retryIntervalMs: Number(input.retryIntervalMs ?? defaults.retryIntervalMs),
-    tokenMode: Boolean(input.tokenMode ?? defaults.tokenMode),
+    tokenMode: input.tokenMode !== false && (input.tokenMode ?? defaults.tokenMode),
+    tokenParticipationMode: normalizeTokenParticipationMode(
+      input.tokenParticipationMode ?? input.tokenModeOverride ?? defaults.tokenParticipationMode,
+    ),
     directedWhoIsEnabled: Boolean(input.directedWhoIsEnabled ?? defaults.directedWhoIsEnabled),
     directedWhoIsMacs: parseMacList(input.directedWhoIsMacs ?? defaults.directedWhoIsMacs),
     extraDiscoveryRetriesEnabled: Boolean(
@@ -180,6 +231,9 @@ function normalizeConfig(input = {}) {
     ),
     preListenMs: Number(input.preListenMs ?? input.initialSilenceMs ?? defaults.preListenMs),
     postSendListenMs: Number(input.postSendListenMs ?? defaults.postSendListenMs),
+    recentActivityWindowMs: Number(
+      input.recentActivityWindowMs ?? defaults.recentActivityWindowMs,
+    ),
   };
 }
 
@@ -252,6 +306,9 @@ function validateConfig(config) {
 
 function getStatusSnapshot() {
   const defaults = getDefaultConfig();
+  const tokenEngine = activeDiscovery?.tokenEngine?.getSnapshot()
+    || activePointDiscovery?.tokenEngine?.getSnapshot()
+    || null;
   return {
     open: interfaceState.open,
     port: interfaceState.port ?? defaults.port,
@@ -264,6 +321,8 @@ function getStatusSnapshot() {
     whoIsRetries: interfaceState.whoIsRetries ?? defaults.whoIsRetries,
     retryIntervalMs: interfaceState.retryIntervalMs ?? defaults.retryIntervalMs,
     tokenMode: interfaceState.tokenMode ?? defaults.tokenMode,
+    autoTokenMode: (interfaceState.tokenMode ?? defaults.tokenMode) !== false,
+    tokenParticipationMode: defaults.tokenParticipationMode,
     tokenParticipationImplemented: TOKEN_PARTICIPATION_IMPLEMENTED,
     rxBytes: interfaceState.rxBytes,
     txBytes: interfaceState.txBytes,
@@ -272,7 +331,8 @@ function getStatusSnapshot() {
     openedAt: interfaceState.openedAt,
     discoveryInProgress: Boolean(activeDiscovery),
     lastDiscoverySessionId: lastSession?.discoverySessionId || null,
-    tokenEngine: activeDiscovery?.tokenEngine?.getSnapshot() || null,
+    busAlive: getBusAliveSnapshot(),
+    tokenEngine,
   };
 }
 
@@ -995,12 +1055,17 @@ function scheduleTokenEngineWork(tokenEngine, port, recordSessionLog) {
 }
 
 function createDiscoveryTokenEngine(config, recordSessionLog) {
+  busAliveCache.recentActivityWindowMs = config.recentActivityWindowMs;
   return new MstpTokenEngine({
     macAddress: config.macAddress,
     maxMaster: config.maxMaster,
     maxInfoFrames: config.maxInfoFrames,
     baudRate: config.baudRate,
     preListenMs: config.preListenMs,
+    busAliveRecently: isBusAliveRecently(),
+    recentActivityWindowMs: config.recentActivityWindowMs,
+    participationMode: config.tokenParticipationMode,
+    onValidFrame: recordBusAliveFrame,
     buildFrame: (frameType, destination, source, data) => buildMstpFrame(
       frameType,
       destination,
@@ -1077,7 +1142,8 @@ async function discover(input = {}) {
   let engineTickTimer = null;
   let whoIsQueueTimer = null;
   let tokenEngine = null;
-  const useTokenMode = Boolean(config.tokenMode && TOKEN_PARTICIPATION_IMPLEMENTED);
+  const useTokenMode = resolveUseTokenMode(config) && TOKEN_PARTICIPATION_IMPLEMENTED;
+  config.preListenMs = preListenMs;
 
   const recordSessionLog = (level, message, extra = {}) => {
     const enriched = { discoverySessionId, ...extra };
@@ -1105,7 +1171,7 @@ async function discover(input = {}) {
         timeoutMs: config.timeoutMs,
         whoIsRetries: config.whoIsRetries,
         retryIntervalMs: config.retryIntervalMs,
-        tokenMode: config.tokenMode,
+        tokenMode: useTokenMode,
       });
     }
 
@@ -1117,7 +1183,7 @@ async function discover(input = {}) {
     if (useTokenMode) {
       tokenEngine = createDiscoveryTokenEngine(config, recordSessionLog);
       activeDiscovery.tokenEngine = tokenEngine;
-      recordSessionLog('info', `Token mode engaged — master MAC ${config.macAddress}, pre-listen ${preListenMs}ms before sole-master startup if bus is idle (Who-Is only while holding token)`);
+      recordSessionLog('info', 'MS/TP Auto Token Mode started — Who-Is is sent only while holding token');
       engineTickTimer = setInterval(() => {
         scheduleTokenEngineWork(tokenEngine, port, recordSessionLog);
       }, Math.max(1, Math.floor(tokenEngine.tSlot)));
@@ -1133,6 +1199,7 @@ async function discover(input = {}) {
         rxBuffer = remaining;
 
         for (const frame of frames) {
+          recordBusAliveFrame(frame);
           // Record a raw diagnostic for every received frame, regardless of
           // whether it parsed into a device.
           recordFrameDiagnostic(frame, discoverySessionId);
@@ -1238,12 +1305,12 @@ async function discover(input = {}) {
       whoIsData,
     );
 
-    if (config.tokenMode && !TOKEN_PARTICIPATION_IMPLEMENTED) {
-      const tokenWarning = 'Token mode requested, but MS/TP token participation is not implemented yet. Falling back to send-only diagnostic discovery.';
+    if (config.tokenMode === false && config.tokenParticipationMode === PARTICIPATION_MODE.AUTO) {
+      const tokenWarning = 'Send-only discovery mode — Who-Is is broadcast without token participation (advanced/diagnostic only).';
       warnings.push(tokenWarning);
       recordSessionLog('warn', tokenWarning);
     } else if (!useTokenMode && TOKEN_PARTICIPATION_IMPLEMENTED) {
-      recordSessionLog('warn', 'Send-only discovery — enable Token Mode for non-disruptive MS/TP bus participation');
+      recordSessionLog('warn', 'Send-only discovery — Auto Token Mode is recommended for normal use');
     } else if (!TOKEN_PARTICIPATION_IMPLEMENTED) {
       recordSessionLog('warn', 'MS/TP token participation not implemented — frames are sent directly on the bus');
     }
@@ -1368,7 +1435,9 @@ async function discover(input = {}) {
       logs: sessionLogs,
       frames: [...frameDiagnostics],
       warnings,
-      tokenMode: config.tokenMode,
+      tokenMode: useTokenMode,
+      autoTokenMode: useTokenMode,
+      tokenParticipationMode: config.tokenParticipationMode,
       tokenParticipationImplemented: TOKEN_PARTICIPATION_IMPLEMENTED,
       directedWhoIsEnabled: config.directedWhoIsEnabled,
       directedWhoIsMacs: config.directedWhoIsMacs,
@@ -1398,7 +1467,9 @@ async function discover(input = {}) {
       logs: sessionLogs,
       frames: [...frameDiagnostics],
       warnings,
-      tokenMode: config.tokenMode,
+      tokenMode: useTokenMode,
+      autoTokenMode: useTokenMode,
+      tokenParticipationMode: config.tokenParticipationMode,
       tokenParticipationImplemented: TOKEN_PARTICIPATION_IMPLEMENTED,
       status: getStatusSnapshot(),
     };
@@ -1606,8 +1677,8 @@ async function discoverPointsForDevice(options = {}) {
     throw error;
   }
 
-  if (!config.tokenMode) {
-    const error = new Error('Token Mode must be enabled for MS/TP point discovery');
+  if (!resolveUseTokenMode(config)) {
+    const error = new Error('Auto Token Mode must be enabled for MS/TP point discovery');
     error.statusCode = 400;
     error.code = 'TOKEN_MODE_REQUIRED';
     throw error;
@@ -1664,7 +1735,7 @@ async function discoverPointsForDevice(options = {}) {
         maxMaster: config.maxMaster,
         maxInfoFrames: config.maxInfoFrames,
         networkNumber: config.networkNumber,
-        tokenMode: config.tokenMode,
+        tokenMode: true,
       });
     }
 
@@ -1674,6 +1745,7 @@ async function discoverPointsForDevice(options = {}) {
     }
 
     tokenEngine = createDiscoveryTokenEngine(config, recordLog);
+    activePointDiscovery.tokenEngine = tokenEngine;
     recordLog('info', `Point discovery started for managed device MAC ${targetMac}, instance ${deviceInstance}`);
 
     const waitForResponse = (invokeId, expectType) => new Promise((resolve, reject) => {

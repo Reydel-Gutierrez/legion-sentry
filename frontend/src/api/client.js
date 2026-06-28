@@ -51,8 +51,20 @@ export const api = {
   updateManagedDevice: (id, data) => request(`/devices/managed/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   unmanageDevice: (id) => request(`/devices/managed/${id}`, { method: 'DELETE' }),
   getManagedDevicePoints: (id) => request(`/devices/managed/${id}/points`),
-  discoverManagedDevicePoints: (id) => request(`/devices/managed/${id}/discover-points`, { method: 'POST' }),
+  discoverManagedDevicePoints: (id, body) => request(`/devices/managed/${id}/discover-points`, {
+    method: 'POST',
+    body: JSON.stringify(body || {}),
+  }),
   clearManagedDevicePoints: (id) => request(`/devices/managed/${id}/points`, { method: 'DELETE' }),
+  getExecutionStatus: () => request('/execution/status'),
+  getExecutionJobs: (params = {}) => {
+    const query = new URLSearchParams(params).toString();
+    return request(`/execution/jobs${query ? `?${query}` : ''}`);
+  },
+  getExecutionJob: (id) => request(`/execution/jobs/${id}`),
+  createExecutionJob: (payload) => request('/execution/jobs', { method: 'POST', body: JSON.stringify(payload) }),
+  cancelExecutionJob: (id) => request(`/execution/jobs/${id}/cancel`, { method: 'POST' }),
+  clearCompletedExecutionJobs: () => request('/execution/jobs/clear-completed', { method: 'POST' }),
   getDevice: (id) => request(`/devices/${id}`),
   getDeviceHealth: (id) => request(`/devices/${id}/health`),
   getDeviceObjects: (id) => request(`/devices/${id}/objects`),

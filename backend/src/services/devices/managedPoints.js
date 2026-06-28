@@ -168,11 +168,29 @@ function buildMockPoints(managedDeviceId) {
   }));
 }
 
-async function discoverPointsForManagedDevice(managedDeviceId) {
+async function runPointDiscovery(managedDeviceId, hooks = {}) {
+  const { onProgress, shouldCancel } = hooks;
+  const report = (progress, message) => {
+    if (typeof onProgress === 'function') onProgress(progress, message);
+  };
+  const cancelled = () => {
+    if (typeof shouldCancel === 'function' && shouldCancel()) {
+      const error = new Error('Job cancelled');
+      error.code = 'JOB_CANCELLED';
+      throw error;
+    }
+  };
+
   const device = validateManagedDeviceForPointDiscovery(getManagedDeviceRecord(managedDeviceId));
+  report(0, 'Queued');
 
   if (useMockData()) {
+    cancelled();
+    report(10, 'Reading objectList');
+    report(25, 'objectList read');
+    report(95, 'Reading point properties');
     const points = mergeDiscoveredPoints(managedDeviceId, buildMockPoints(managedDeviceId));
+    report(100, 'Discovery complete');
     return {
       success: true,
       managedDeviceId,
@@ -187,11 +205,16 @@ async function discoverPointsForManagedDevice(managedDeviceId) {
   }
 
   try {
+    cancelled();
+    report(10, 'Reading objectList');
     const discovery = await bacnetMstpService.discoverPointsForDevice({
       managedDevice: device,
+      onProgress: report,
+      shouldCancel,
     });
 
     const points = mergeDiscoveredPoints(managedDeviceId, discovery.points || []);
+    report(100, 'Discovery complete');
 
     return {
       ...discovery,
@@ -199,6 +222,9 @@ async function discoverPointsForManagedDevice(managedDeviceId) {
       pointsFound: points.length,
     };
   } catch (err) {
+    if (err.code === 'JOB_CANCELLED') {
+      throw err;
+    }
     if (err.result) {
       const error = new Error(err.message || 'Point discovery failed');
       error.statusCode = err.statusCode || 502;
@@ -213,9 +239,14 @@ async function discoverPointsForManagedDevice(managedDeviceId) {
   }
 }
 
+async function discoverPointsForManagedDevice(managedDeviceId) {
+  return runPointDiscovery(managedDeviceId);
+}
+
 module.exports = {
   listPointsByManagedDeviceId,
   discoverPointsForManagedDevice,
+  runPointDiscovery,
   clearPointsForManagedDevice,
   normalizePointForApi,
 };

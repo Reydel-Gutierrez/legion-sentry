@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { Form } from 'react-bootstrap';
 import { api } from '../api/client';
 import KvRow from '../components/common/KvRow';
-import SectionCard from '../components/common/SectionCard';
 import StatusChip from '../components/common/StatusChip';
 import PageHeader from '../components/common/PageHeader';
 import ActionButton from '../components/common/ActionButton';
@@ -58,6 +57,47 @@ function StatusItem({ label, children }) {
   );
 }
 
+const CARD_ICONS = {
+  settings: (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <path d="M10 2a2 2 0 012 2v.6a5 5 0 011.6.9l.5-.3a2 2 0 012.7.7l.1.2a2 2 0 01-.7 2.7l-.5.3a5 5 0 010 1.8l.5.3a2 2 0 01.7 2.7l-.1.2a2 2 0 01-2.7.7l-.5-.3a5 5 0 01-1.6.9V16a2 2 0 11-4 0v-.6a5 5 0 01-1.6-.9l-.5.3a2 2 0 01-2.7-.7l-.1-.2a2 2 0 01.7-2.7l.5-.3a5 5 0 010-1.8l-.5-.3a2 2 0 01-.7-2.7l.1-.2a2 2 0 012.7-.7l.5.3a5 5 0 011.6-.9V4a2 2 0 012-2zm0 5a3 3 0 100 6 3 3 0 000-6z" />
+    </svg>
+  ),
+  diagnostics: (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <path d="M10 2l1.8 3.6L16 6.5l-2.8 2.7.7 4.1L10 11.8 6.1 13.3l.7-4.1L4 6.5l4.2-.9L10 2z" />
+    </svg>
+  ),
+  logs: (
+    <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+      <path d="M5 4h10v2H5V4zm0 4h10v2H5V8zm0 4h7v2H5v-2z" />
+    </svg>
+  ),
+};
+
+function ConfigCard({
+  icon, title, status, open, onToggle, children,
+}) {
+  return (
+    <div className={`config-card${open ? ' open' : ''}`}>
+      <button
+        type="button"
+        className="config-card-header"
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        {icon && <span className="config-card-icon">{CARD_ICONS[icon]}</span>}
+        <span className="config-card-title">{title}</span>
+        <span className="config-card-trailing">
+          {status}
+          <span className="config-card-caret" aria-hidden="true" />
+        </span>
+      </button>
+      {open && <div className="config-card-body">{children}</div>}
+    </div>
+  );
+}
+
 export default function BacnetMstpPage() {
   const navigate = useNavigate();
   const [mstpStatus, setMstpStatus] = useState(null);
@@ -70,6 +110,9 @@ export default function BacnetMstpPage() {
   const [loading, setLoading] = useState(false);
   const [missedDevices, setMissedDevices] = useState([]);
   const [managedKeys, setManagedKeys] = useState(new Set());
+  const [openCards, setOpenCards] = useState({ basic: true, advanced: false, logs: false });
+
+  const toggleCard = (key) => setOpenCards((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const load = useCallback(async () => {
     const [status, mstp, deviceData, managedData, logData, frameData] = await Promise.all([
@@ -378,153 +421,141 @@ export default function BacnetMstpPage() {
         </div>
       ))}
 
-      <SectionCard title="Status Summary" className="mb-3">
-        <div className="mstp-status-grid">
-          <StatusItem label="Interface">
-            <StatusChip label={interfaceOpen ? 'Open' : 'Closed'} tone={interfaceOpen ? 'success' : 'neutral'} />
-          </StatusItem>
-          <StatusItem label="Bus">
-            <StatusChip tone={busStatus.tone} label={busStatus.label} />
-          </StatusItem>
-          <StatusItem label="Token">
-            <StatusChip tone={tokenStatus.tone} label={tokenStatus.label} />
-          </StatusItem>
-          <StatusItem label="Last Frame">
-            <span>{formatTimeAgo(lastFrameAt)}</span>
-          </StatusItem>
-          <StatusItem label="Local MAC">
-            <span className="mono">{mstp.macAddress ?? mstpForm.macAddress}</span>
-          </StatusItem>
-          <StatusItem label="Masters Detected">
-            <span>{te?.mastersDetected?.length ?? 0}</span>
-          </StatusItem>
-        </div>
-        {te && (
-          <div className="mt-3 pt-2" style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-            <StatusChip
-              tone={MSTP_PARTICIPATION_STATUS_META[te.participationStatus]?.tone || 'neutral'}
-              label={mstpParticipationLabel(te.participationStatus)}
-            />
-            <span className="text-muted ms-2" style={{ fontSize: '0.85rem' }}>
-              Auto Token Mode — pre-listen, join active ring, or start idle ring
-            </span>
+      <div className="mstp-layout">
+        <div className="mstp-col">
+          <div className="mstp-col-header">
+            <span className="mstp-col-label">MS/TP Configuration</span>
           </div>
-        )}
-      </SectionCard>
 
-      <SectionCard title="Discover Devices" className="mb-3">
-        <p className="text-muted mb-3">
-          Sentry will join an active MS/TP ring or start an idle ring automatically. Who-Is is sent only while holding the token.
-        </p>
-        <div className="action-bar">
-          <ActionButton variant="primary" onClick={handleDiscoverMstp} disabled={loading}>
-            Discover Devices
-          </ActionButton>
-          <ActionButton onClick={() => load()} disabled={loading}>
-            Refresh Status
-          </ActionButton>
-          {interfaceOpen && (
-            <ActionButton size="sm" onClick={handleCloseMstp} disabled={loading}>
-              Close Interface
-            </ActionButton>
-          )}
-        </div>
-      </SectionCard>
+          <ConfigCard
+            icon="settings"
+            title="Basic Settings"
+            open={openCards.basic}
+            onToggle={() => toggleCard('basic')}
+            status={<StatusChip label={interfaceOpen ? 'Interface open' : 'Ready'} tone="success" />}
+          >
+            <div className="form-grid form-grid--2 mb-3">
+              <div className="field-group">
+                <label className="form-label">Serial Port</label>
+                <input
+                  className="form-control"
+                  value={mstpForm.port}
+                  onChange={(e) => updateMstp('port', e.target.value)}
+                  disabled={interfaceOpen}
+                />
+              </div>
+              <div className="field-group">
+                <label className="form-label">Baud Rate</label>
+                <select
+                  className="form-select"
+                  value={mstpForm.baudRate}
+                  onChange={(e) => updateMstp('baudRate', Number(e.target.value))}
+                  disabled={interfaceOpen}
+                >
+                  {BAUD_RATES.map((rate) => (
+                    <option key={rate} value={rate}>{rate}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
-      <SectionCard
-        title="Basic MS/TP Settings"
-        status={<StatusChip label={interfaceOpen ? 'Interface open' : 'Ready'} />}
-        className="mb-3"
-      >
-        <div className="form-grid form-grid--2 mb-3">
-          <div className="field-group field-group--lg">
-            <label className="form-label">Serial Port</label>
-            <input
-              className="form-control"
-              value={mstpForm.port}
-              onChange={(e) => updateMstp('port', e.target.value)}
-              disabled={interfaceOpen}
-            />
-          </div>
-          <div className="field-group field-group--md">
-            <label className="form-label">Baud Rate</label>
-            <select
-              className="form-select"
-              value={mstpForm.baudRate}
-              onChange={(e) => updateMstp('baudRate', Number(e.target.value))}
-              disabled={interfaceOpen}
-            >
-              {BAUD_RATES.map((rate) => (
-                <option key={rate} value={rate}>{rate}</option>
-              ))}
-            </select>
-          </div>
-        </div>
+            <div className="form-grid form-grid--2 mb-3">
+              <CompactNumberField
+                label="Sentry MAC Address"
+                value={mstpForm.macAddress}
+                disabled={interfaceOpen}
+                width="full"
+                onChange={(e) => updateMstp('macAddress', Number(e.target.value))}
+              />
+              <CompactNumberField
+                label="Max Master"
+                value={mstpForm.maxMaster}
+                disabled={interfaceOpen}
+                width="full"
+                hint="Highest master MAC to search for. 127 is safest."
+                onChange={(e) => updateMstp('maxMaster', Number(e.target.value))}
+              />
+            </div>
 
-        <div className="form-grid form-grid--4 mb-3">
-          <CompactNumberField
-            label="Sentry MAC Address"
-            value={mstpForm.macAddress}
-            disabled={interfaceOpen}
-            width="xs"
-            hint="Sentry's MS/TP master MAC. Must be unique on the trunk."
-            onChange={(e) => updateMstp('macAddress', Number(e.target.value))}
-          />
-          <CompactNumberField
-            label="Max Master"
-            value={mstpForm.maxMaster}
-            disabled={interfaceOpen}
-            width="xs"
-            hint="Highest master MAC to search for. 127 is safest; lower is faster if known."
-            onChange={(e) => updateMstp('maxMaster', Number(e.target.value))}
-          />
-          <CompactNumberField
-            label="Network Number"
-            value={mstpForm.networkNumber}
-            disabled={interfaceOpen}
-            width="sm"
-            onChange={(e) => updateMstp('networkNumber', Number(e.target.value))}
-          />
-          <CompactNumberField
-            label="Timeout (ms)"
-            value={mstpForm.timeoutMs}
-            width="md"
-            onChange={(e) => updateMstp('timeoutMs', Number(e.target.value))}
-          />
-        </div>
+            <div className="form-grid form-grid--2 mb-3">
+              <CompactNumberField
+                label="Network Number"
+                value={mstpForm.networkNumber}
+                disabled={interfaceOpen}
+                width="full"
+                onChange={(e) => updateMstp('networkNumber', Number(e.target.value))}
+              />
+              <CompactNumberField
+                label="Timeout (ms)"
+                value={mstpForm.timeoutMs}
+                width="full"
+                onChange={(e) => updateMstp('timeoutMs', Number(e.target.value))}
+              />
+            </div>
 
-        <p className="field-hint mb-3">
-          Auto Token Mode: Sentry will join an active ring or start an idle ring automatically.
-        </p>
+            <div className="toggle-row">
+              <div>
+                <div className="toggle-row-label">Auto Token Mode</div>
+                <p className="field-hint mb-0">
+                  Sentry will join an active MS/TP ring or start an idle ring automatically.
+                </p>
+              </div>
+              <Form.Check
+                type="switch"
+                id="mstp-auto-token"
+                className="toggle-switch"
+                checked={mstpForm.tokenMode !== false}
+                onChange={(e) => updateMstp('tokenMode', e.target.checked)}
+              />
+            </div>
 
-        <div className="action-bar">
-          <ActionButton onClick={handleSaveMstpConfig} disabled={loading}>
-            Save Settings
-          </ActionButton>
-          <ActionButton onClick={handleClearSession} disabled={loading}>
-            Clear Latest Scan
-          </ActionButton>
-        </div>
-      </SectionCard>
+            <div className="action-bar">
+              <ActionButton onClick={handleSaveMstpConfig} disabled={loading}>
+                Save Settings
+              </ActionButton>
+              <ActionButton onClick={() => setOpenCards((prev) => ({ ...prev, advanced: true }))}>
+                Advanced Settings ›
+              </ActionButton>
+            </div>
+          </ConfigCard>
 
-      <SectionCard title="Discovered Devices" className="mb-3">
-        <DataTable
-          columns={deviceColumns}
-          rows={mstpDevices}
-          rowKey={(d) => d.id}
-          pageSize={10}
-          emptyMessage="No MS/TP devices discovered yet. Click Discover Devices."
-        />
-      </SectionCard>
+          <ConfigCard
+            icon="diagnostics"
+            title="Advanced Diagnostics"
+            open={openCards.advanced}
+            onToggle={() => toggleCard('advanced')}
+          >
+            <div className="form-section-title">Status</div>
+            <div className="mstp-status-grid mb-3">
+              <StatusItem label="Interface">
+                <StatusChip label={interfaceOpen ? 'Open' : 'Closed'} tone={interfaceOpen ? 'success' : 'neutral'} />
+              </StatusItem>
+              <StatusItem label="Bus">
+                <StatusChip tone={busStatus.tone} label={busStatus.label} />
+              </StatusItem>
+              <StatusItem label="Token">
+                <StatusChip tone={tokenStatus.tone} label={tokenStatus.label} />
+              </StatusItem>
+              <StatusItem label="Last Frame">
+                <span>{formatTimeAgo(lastFrameAt)}</span>
+              </StatusItem>
+              <StatusItem label="Local MAC">
+                <span className="mono">{mstp.macAddress ?? mstpForm.macAddress}</span>
+              </StatusItem>
+              <StatusItem label="Masters Detected">
+                <span>{te?.mastersDetected?.length ?? 0}</span>
+              </StatusItem>
+            </div>
+            {te && (
+              <div className="mb-3">
+                <StatusChip
+                  tone={MSTP_PARTICIPATION_STATUS_META[te.participationStatus]?.tone || 'neutral'}
+                  label={mstpParticipationLabel(te.participationStatus)}
+                />
+              </div>
+            )}
 
-      <SectionCard title="Advanced Diagnostics" className="mb-3">
-        <CollapsibleSection title="Token Engine, Timing & Manual Modes" defaultOpen={false}>
-          <div className="p-3">
-            <div className="form-section-title">Auto Token Mode</div>
-            <p className="field-hint mb-3">
-              Pre-listen, join active ring, or start idle ring. Who-Is is sent only while holding token.
-            </p>
-
+            <div className="form-section-title">Token Mode</div>
             <div className="form-grid form-grid--2 mb-3">
               <div className="field-group">
                 <label className="form-label">Participation Override</label>
@@ -538,26 +569,16 @@ export default function BacnetMstpPage() {
                   ))}
                 </select>
               </div>
-              <div className="field-group">
-                <Form.Check
-                  type="checkbox"
-                  id="mstp-send-only"
-                  className="mt-4"
-                  label="Send-only mode (disable Auto Token Mode — diagnostic only)"
-                  checked={mstpForm.tokenMode === false}
-                  onChange={(e) => updateMstp('tokenMode', !e.target.checked)}
-                />
-              </div>
             </div>
 
             <div className="form-section-title">Discovery Timing</div>
-            <div className="form-grid form-grid--4 mb-3">
-              <CompactNumberField label="Pre-listen (ms)" value={mstpForm.preListenMs} width="sm" onChange={(e) => updateMstp('preListenMs', Number(e.target.value))} />
-              <CompactNumberField label="Post-send Listen (ms)" value={mstpForm.postSendListenMs} width="sm" onChange={(e) => updateMstp('postSendListenMs', Number(e.target.value))} />
-              <CompactNumberField label="Who-Is Retries" value={mstpForm.whoIsRetries} width="xs" onChange={(e) => updateMstp('whoIsRetries', Number(e.target.value))} />
-              <CompactNumberField label="Retry Interval (ms)" value={mstpForm.retryIntervalMs} width="sm" onChange={(e) => updateMstp('retryIntervalMs', Number(e.target.value))} />
-              <CompactNumberField label="Recent Activity Window (ms)" value={mstpForm.recentActivityWindowMs} width="sm" onChange={(e) => updateMstp('recentActivityWindowMs', Number(e.target.value))} />
-              <CompactNumberField label="Max Info Frames" value={mstpForm.maxInfoFrames} width="xs" disabled={interfaceOpen} onChange={(e) => updateMstp('maxInfoFrames', Number(e.target.value))} />
+            <div className="form-grid form-grid--2 mb-3">
+              <CompactNumberField label="Pre-listen (ms)" value={mstpForm.preListenMs} width="full" onChange={(e) => updateMstp('preListenMs', Number(e.target.value))} />
+              <CompactNumberField label="Post-send Listen (ms)" value={mstpForm.postSendListenMs} width="full" onChange={(e) => updateMstp('postSendListenMs', Number(e.target.value))} />
+              <CompactNumberField label="Who-Is Retries" value={mstpForm.whoIsRetries} width="full" onChange={(e) => updateMstp('whoIsRetries', Number(e.target.value))} />
+              <CompactNumberField label="Retry Interval (ms)" value={mstpForm.retryIntervalMs} width="full" onChange={(e) => updateMstp('retryIntervalMs', Number(e.target.value))} />
+              <CompactNumberField label="Recent Activity Window (ms)" value={mstpForm.recentActivityWindowMs} width="full" onChange={(e) => updateMstp('recentActivityWindowMs', Number(e.target.value))} />
+              <CompactNumberField label="Max Info Frames" value={mstpForm.maxInfoFrames} width="full" disabled={interfaceOpen} onChange={(e) => updateMstp('maxInfoFrames', Number(e.target.value))} />
             </div>
 
             <div className="form-section-title">Directed Who-Is</div>
@@ -605,7 +626,7 @@ export default function BacnetMstpPage() {
             {frames.length > 0 && (
               <>
                 <div className="form-section-title">Scan Summary</div>
-                <div className="status-readout mb-3">
+                <div className="status-readout">
                   <KvRow label="Total Frames" value={scanSummary.totalFrames} />
                   <KvRow label="Token Frames" value={scanSummary.tokenFrames} />
                   <KvRow label="Poll For Master" value={scanSummary.pollForMasterFrames} />
@@ -614,40 +635,101 @@ export default function BacnetMstpPage() {
                 </div>
               </>
             )}
-          </div>
-        </CollapsibleSection>
-      </SectionCard>
+          </ConfigCard>
 
-      <SectionCard title="Logs & Raw Frames" className="mb-3">
-        <CollapsibleSection title="Discovery Log" defaultOpen={false}>
-          <div className="p-2">
-            <div className="action-bar mb-2">
+          <ConfigCard
+            icon="logs"
+            title="Logs & Raw Frames"
+            open={openCards.logs}
+            onToggle={() => toggleCard('logs')}
+          >
+            <div className="action-bar mb-3">
               <ActionButton size="sm" onClick={handleClearLogs} disabled={loading}>
                 Clear Logs
               </ActionButton>
             </div>
-            <DataTable
-              columns={logColumns}
-              rows={logs}
-              rowKey={(e, i) => `${e.time}-${i}`}
-              pageSize={8}
-              emptyMessage="No discovery logs yet."
-            />
-          </div>
-        </CollapsibleSection>
+            <CollapsibleSection title="Discovery Log" defaultOpen={false}>
+              <div className="p-2">
+                <DataTable
+                  columns={logColumns}
+                  rows={logs}
+                  rowKey={(e, i) => `${e.time}-${i}`}
+                  pageSize={8}
+                  emptyMessage="No discovery logs yet."
+                />
+              </div>
+            </CollapsibleSection>
 
-        <CollapsibleSection title="Raw MS/TP Frames" defaultOpen={false}>
-          <div className="p-2">
-            <DataTable
-              columns={frameColumns}
-              rows={frames}
-              rowKey={(f, i) => `${f.timestamp}-${i}`}
-              pageSize={8}
-              emptyMessage="No frames captured yet."
-            />
+            <CollapsibleSection title="Raw MS/TP Frames" defaultOpen={false} className="mt-2">
+              <div className="p-2">
+                <DataTable
+                  columns={frameColumns}
+                  rows={frames}
+                  rowKey={(f, i) => `${f.timestamp}-${i}`}
+                  pageSize={8}
+                  emptyMessage="No frames captured yet."
+                />
+              </div>
+            </CollapsibleSection>
+          </ConfigCard>
+        </div>
+
+        <div className="mstp-col">
+          <div className="mstp-col-header">
+            <span className="mstp-col-label">Discovery</span>
+            <div className="mstp-col-actions">
+              <ActionButton onClick={handleClearSession} disabled={loading}>
+                Clear Latest Scan
+              </ActionButton>
+              <ActionButton variant="primary" onClick={handleDiscoverMstp} disabled={loading}>
+                Discover Devices
+              </ActionButton>
+            </div>
           </div>
-        </CollapsibleSection>
-      </SectionCard>
+
+          <div className="sentry-card discovery-card">
+            <div className="discovery-intro">
+              <p className="text-muted mb-0">
+                Sentry will join an active MS/TP ring or start an idle ring automatically.
+                Who-Is is sent only while holding the token.
+              </p>
+              <div className="discovery-intro-actions">
+                {interfaceOpen && (
+                  <ActionButton size="sm" onClick={handleCloseMstp} disabled={loading}>
+                    Close Interface
+                  </ActionButton>
+                )}
+                <ActionButton onClick={() => load()} disabled={loading}>
+                  Refresh Status
+                </ActionButton>
+              </div>
+            </div>
+
+            <div className="discovery-devices">
+              <div className="discovery-devices-header">
+                <div className="discovery-devices-heading">
+                  <span className="section-card-title">Discovered Devices</span>
+                  <span className="discovery-count">
+                    {mstpDevices.length}
+                    {' '}
+                    {mstpDevices.length === 1 ? 'device' : 'devices'}
+                  </span>
+                </div>
+                <ActionButton onClick={() => load()} disabled={loading}>
+                  Refresh
+                </ActionButton>
+              </div>
+              <DataTable
+                columns={deviceColumns}
+                rows={mstpDevices}
+                rowKey={(d) => d.id}
+                pageSize={10}
+                emptyMessage="No MS/TP devices discovered yet. Click Discover Devices."
+              />
+            </div>
+          </div>
+        </div>
+      </div>
     </>
   );
 }

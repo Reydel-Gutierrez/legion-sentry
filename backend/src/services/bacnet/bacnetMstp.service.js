@@ -131,6 +131,7 @@ let lastSession = null;
 let processCleanupRegistered = false;
 let activeDiscovery = null;
 let activePointDiscovery = null;
+let activeFieldRead = null;
 
 const DEFAULT_POINT_REQUEST_TIMEOUT_MS = 4000;
 const DEFAULT_POINT_MAX_RETRIES = 2;
@@ -1668,6 +1669,15 @@ async function discoverPointsForDevice(options = {}) {
   const requestTimeoutMs = Number(options.requestTimeoutMs ?? DEFAULT_POINT_REQUEST_TIMEOUT_MS);
   const maxRetries = Number(options.maxRetries ?? DEFAULT_POINT_MAX_RETRIES);
   const sessionTimeoutMs = Number(options.timeoutMs ?? DEFAULT_POINT_SESSION_TIMEOUT_MS);
+  const onProgress = typeof options.onProgress === 'function' ? options.onProgress : () => {};
+  const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false;
+  const checkCancelled = () => {
+    if (shouldCancel()) {
+      const error = new Error('Job cancelled');
+      error.code = 'JOB_CANCELLED';
+      throw error;
+    }
+  };
   const targetMac = managedDevice.mstpMacAddress;
   const deviceInstance = Number(managedDevice.deviceInstance);
 
@@ -1869,6 +1879,8 @@ async function discoverPointsForDevice(options = {}) {
     };
 
     ensureSessionTime();
+    checkCancelled();
+    onProgress(10, 'Reading objectList');
     const objectList = await readDeviceObjectList({
       deviceInstance,
       sendConfirmedRequest,
@@ -1880,6 +1892,7 @@ async function discoverPointsForDevice(options = {}) {
       throw new Error('Device objectList is empty or could not be decoded');
     }
 
+    onProgress(25, `objectList read — ${objectList.length} object(s)`);
     recordLog('info', `objectList read — ${objectList.length} object(s) reported by device`);
 
     const points = [];
@@ -1888,8 +1901,13 @@ async function discoverPointsForDevice(options = {}) {
       .filter((obj) => !(obj.objectType === bacnetApdu.DEVICE_OBJECT_TYPE && obj.instance === deviceInstance))
       .slice(0, MAX_POINT_OBJECTS);
 
-    for (const obj of objectsToRead) {
+    for (let index = 0; index < objectsToRead.length; index += 1) {
+      const obj = objectsToRead[index];
       ensureSessionTime();
+      checkCancelled();
+      const total = objectsToRead.length;
+      const progress = 25 + Math.floor(((index + 1) / total) * 70);
+      onProgress(progress, `Reading point properties (${index + 1}/${total})`);
       try {
         const fields = await readPropertiesForObject({
           objectType: obj.objectType,
@@ -1917,6 +1935,7 @@ async function discoverPointsForDevice(options = {}) {
     }
 
     const durationMs = Date.now() - startedAt;
+    onProgress(100, 'Discovery complete');
     recordLog('info', `Point discovery complete — ${points.length} point(s), ${failures.length} failure(s) in ${durationMs}ms`);
 
     return {
@@ -1976,6 +1995,296 @@ async function discoverPointsForDevice(options = {}) {
   }
 }
 
+async function readPropertyForDevice(options = {}) {
+  if (activeDiscovery) {
+    const error = new Error('BACnet MS/TP discovery is already in progress');
+    error.statusCode = 409;
+    error.code = 'DISCOVERY_IN_PROGRESS';
+    throw error;
+  }
+  if (activePointDiscovery) {
+    const error = new Error('BACnet MS/TP point discovery is already in progress');
+    error.statusCode = 409;
+    error.code = 'POINT_DISCOVERY_IN_PROGRESS';
+    throw error;
+  }
+  if (activeFieldRead) {
+    const error = new Error('BACnet MS/TP field read is already in progress');
+    error.statusCode = 409;
+    error.code = 'FIELD_READ_IN_PROGRESS';
+    throw error;
+  }
+
+  const managedDevice = options.managedDevice;
+  if (!managedDevice) {
+    const error = new Error('managedDevice is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const objectType = Number(options.objectType);
+  const objectInstance = Number(options.objectInstance);
+  const propertyIdentifier = Number(options.propertyIdentifier);
+  if (!Number.isInteger(objectType) || !Number.isInteger(objectInstance) || !Number.isInteger(propertyIdentifier)) {
+    const error = new Error('objectType, objectInstance, and propertyIdentifier are required integers');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const startedAt = Date.now();
+  const config = validateConfig(normalizeConfig(options.config || getDefaultConfig()));
+  const requestTimeoutMs = Number(options.requestTimeoutMs ?? DEFAULT_POINT_REQUEST_TIMEOUT_MS);
+  const maxRetries = Number(options.maxRetries ?? DEFAULT_POINT_MAX_RETRIES);
+  const sessionTimeoutMs = Number(options.timeoutMs ?? 30000);
+  const shouldCancel = typeof options.shouldCancel === 'function' ? options.shouldCancel : () => false;
+  const onTokenWait = typeof options.onTokenWait === 'function' ? options.onTokenWait : () => {};
+  const onExecuting = typeof options.onExecuting === 'function' ? options.onExecuting : () => {};
+  const checkCancelled = () => {
+    if (shouldCancel()) {
+      const error = new Error('Job cancelled');
+      error.code = 'JOB_CANCELLED';
+      throw error;
+    }
+  };
+
+  const targetMac = managedDevice.mstpMacAddress;
+  const deviceInstance = Number(managedDevice.deviceInstance);
+
+  if (!resolveUseTokenMode(config)) {
+    const error = new Error('Auto Token Mode must be enabled for MS/TP property reads');
+    error.statusCode = 400;
+    error.code = 'TOKEN_MODE_REQUIRED';
+    throw error;
+  }
+
+  ensureSerialMonitorNotRunning();
+
+  const sessionLogs = [];
+  const recordLog = (level, message, extra = {}) => {
+    sessionLogs.push({
+      time: new Date().toISOString(),
+      level,
+      source: 'bacnet-mstp-read',
+      message,
+      managedDeviceId: managedDevice.id,
+      mstpMacAddress: targetMac,
+      deviceInstance,
+      ...extra,
+    });
+    addDiscoveryLog(level, `[read] ${message}`, {
+      managedDeviceId: managedDevice.id,
+      mstpMacAddress: targetMac,
+      deviceInstance,
+      ...extra,
+    });
+  };
+
+  const wasOpenBefore = interfaceState.open;
+  const openedForSession = !wasOpenBefore;
+  let rxBuffer = Buffer.alloc(0);
+  let dataListener = null;
+  let engineTickTimer = null;
+  let tokenEngine = null;
+  let invokeIdCounter = 0;
+  const pending = new Map();
+
+  const nextInvokeId = () => {
+    invokeIdCounter = (invokeIdCounter % 255) + 1;
+    return invokeIdCounter;
+  };
+
+  activeFieldRead = {
+    startedAt,
+    managedDeviceId: managedDevice.id,
+    targetMac,
+    objectType,
+    objectInstance,
+    propertyIdentifier,
+  };
+
+  try {
+    if (!interfaceState.open) {
+      await openInterface(config);
+    } else {
+      Object.assign(interfaceState, {
+        macAddress: config.macAddress,
+        maxMaster: config.maxMaster,
+        maxInfoFrames: config.maxInfoFrames,
+        networkNumber: config.networkNumber,
+        tokenMode: true,
+      });
+    }
+
+    const port = interfaceState.serialPort;
+    if (!port || !port.isOpen) {
+      throw new Error('MS/TP serial port is not open');
+    }
+
+    tokenEngine = createDiscoveryTokenEngine(config, recordLog);
+    activeFieldRead.tokenEngine = tokenEngine;
+    recordLog('info', `Property read started — ${bacnetApdu.objectTypeLabel(objectType)}:${objectInstance} property ${propertyIdentifier}`);
+
+    const waitForResponse = (invokeId, expectType) => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(invokeId);
+        reject(new Error(`No response within ${requestTimeoutMs}ms (invoke ${invokeId})`));
+      }, requestTimeoutMs);
+      pending.set(invokeId, { resolve, reject, timer, expectType });
+    });
+
+    const sendConfirmedRequest = async (buildApdu, expectType, label) => {
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
+        checkCancelled();
+        onTokenWait();
+        const invokeId = nextInvokeId();
+        const apdu = buildApdu(invokeId);
+        const payload = Buffer.concat([bacnetApdu.buildConfirmedNpdu(), apdu]);
+        const frame = buildMstpFrame(
+          MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY,
+          targetMac,
+          config.macAddress,
+          payload,
+        );
+
+        onExecuting(label);
+        const responsePromise = waitForResponse(invokeId, expectType);
+        tokenEngine.queueBacnetFrame(frame, label, { expectsReply: true });
+        scheduleTokenEngineWork(tokenEngine, port, recordLog);
+        recordLog('info', `Read request queued — ${label} (invoke ${invokeId}, attempt ${attempt}/${maxRetries})`);
+
+        try {
+          const response = await responsePromise;
+          recordLog('info', `Read response received — ${label} (invoke ${invokeId})`);
+          return response;
+        } catch (err) {
+          lastError = err;
+          recordLog('warn', `Read request failed — ${label} (invoke ${invokeId}): ${err.message}`);
+        }
+      }
+      throw lastError || new Error(`Read request failed — ${label}`);
+    };
+
+    dataListener = (chunk) => {
+      try {
+        interfaceState.rxBytes += chunk.length;
+        interfaceState.lastActivityAt = new Date().toISOString();
+        rxBuffer = Buffer.concat([rxBuffer, chunk]);
+
+        const { frames, remaining } = parseMstpFrames(rxBuffer);
+        rxBuffer = remaining;
+
+        for (const frame of frames) {
+          const pfmReply = tokenEngine.handleReceivedFrame(frame);
+          if (pfmReply) {
+            enqueueTokenEngineTx(async () => {
+              await delay(tokenEngine.tTurnaround);
+              await writeToPort(port, pfmReply);
+              interfaceState.txBytes += pfmReply.length;
+              interfaceState.lastActivityAt = new Date().toISOString();
+              tokenEngine.notifyTransmitted();
+            }).catch((err) => {
+              recordLog('warn', `Poll For Master reply failed during read: ${err.message}`);
+            });
+          }
+          scheduleTokenEngineWork(tokenEngine, port, recordLog);
+
+          if (frame.source !== targetMac) continue;
+          if (!frame.headerCrcValid || frame.dataCrcValid === false || !frame.data?.length) continue;
+          if (
+            frame.frameType !== MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY
+            && frame.frameType !== MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY
+          ) {
+            continue;
+          }
+
+          const npduInfo = findNpduApdu(frame.data);
+          if (npduInfo?.apduOffset == null) continue;
+
+          const parsed = bacnetApdu.parseConfirmedResponse(frame.data, npduInfo.apduOffset);
+          if (parsed.invokeId == null) continue;
+
+          const pendingReq = pending.get(parsed.invokeId);
+          if (!pendingReq) continue;
+
+          clearTimeout(pendingReq.timer);
+          pending.delete(parsed.invokeId);
+
+          if (parsed.type === 'error' || parsed.type === 'abort' || parsed.type === 'reject') {
+            pendingReq.reject(new Error(`${parsed.type} response (invoke ${parsed.invokeId})`));
+          } else {
+            pendingReq.resolve({
+              ...parsed,
+              responseData: frame.data,
+              apduOffset: npduInfo.apduOffset,
+            });
+          }
+        }
+      } catch (err) {
+        recordLog('warn', `Read RX parse error (ignored): ${err.message}`);
+      }
+    };
+
+    port.on('data', dataListener);
+    engineTickTimer = setInterval(() => {
+      scheduleTokenEngineWork(tokenEngine, port, recordLog);
+    }, Math.max(1, Math.floor(tokenEngine.tSlot)));
+
+    const sessionDeadline = Date.now() + sessionTimeoutMs;
+    const ensureSessionTime = () => {
+      if (Date.now() > sessionDeadline) {
+        const error = new Error(`Property read session timed out after ${sessionTimeoutMs}ms`);
+        error.code = 'PROPERTY_READ_TIMEOUT';
+        throw error;
+      }
+    };
+
+    ensureSessionTime();
+    checkCancelled();
+    const label = `${bacnetApdu.objectTypeLabel(objectType)}:${objectInstance} prop ${propertyIdentifier}`;
+    const response = await sendConfirmedRequest(
+      (invokeId) => bacnetApdu.encodeReadProperty(invokeId, objectType, objectInstance, propertyIdentifier),
+      'readProperty',
+      label,
+    );
+
+    const decoded = response.values?.[0] ?? null;
+    const value = bacnetApdu.formatPresentValue(decoded);
+    const lastReadAt = new Date().toISOString();
+    recordLog('info', `Property read complete in ${Date.now() - startedAt}ms`);
+
+    return {
+      value,
+      raw: decoded,
+      lastReadAt,
+      logs: sessionLogs,
+    };
+  } catch (err) {
+    recordLog('error', `Property read failed: ${err.message}`);
+    throw err;
+  } finally {
+    if (engineTickTimer) {
+      clearInterval(engineTickTimer);
+      engineTickTimer = null;
+    }
+
+    const port = interfaceState.serialPort;
+    if (port && dataListener) {
+      try {
+        port.removeListener('data', dataListener);
+      } catch {
+        // ignore listener cleanup failures
+      }
+    }
+
+    activeFieldRead = null;
+
+    if (openedForSession) {
+      await closeInterfaceInternal('Property read finished');
+    }
+  }
+}
+
 module.exports = {
   getDefaultConfig,
   normalizeConfig,
@@ -1989,6 +2298,7 @@ module.exports = {
   closeInterface,
   discover,
   discoverPointsForDevice,
+  readPropertyForDevice,
   buildWhoIsNpdu,
   buildMstpFrame,
   parseMstpFrames,

@@ -6,6 +6,7 @@ const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', end: true, icon: 'dashboard' },
   { to: '/devices', label: 'Devices', icon: 'devices' },
   { to: '/managed-devices', label: 'Managed Devices', icon: 'managed' },
+  { to: '/execution', label: 'Field Execution', icon: 'execution' },
   { to: '/network', label: 'Network', icon: 'network' },
   {
     label: 'BACnet',
@@ -38,6 +39,11 @@ function NavIcon({ name }) {
     managed: (
       <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
         <path d="M10 2a4 4 0 00-4 4v1H5a2 2 0 00-2 2v7a2 2 0 002 2h10a2 2 0 002-2V9a2 2 0 00-2-2h-1V6a4 4 0 00-4-4zm-2 5V6a2 2 0 114 0v1H8zm2 4a1.5 1.5 0 100 3 1.5 1.5 0 000-3z" />
+      </svg>
+    ),
+    execution: (
+      <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path d="M4 4h12v2H4V4zm0 4h8v2H4V8zm0 4h10v2H4v-2zm0 4h6v2H4v-2z" />
       </svg>
     ),
     network: (
@@ -135,7 +141,8 @@ export default function Sidebar() {
                 className={({ isActive }) => {
                   const active = isActive
                     || (item.to === '/devices' && location.pathname.startsWith('/devices/'))
-                    || (item.to === '/managed-devices' && location.pathname.startsWith('/managed-devices'));
+                    || (item.to === '/managed-devices' && location.pathname.startsWith('/managed-devices'))
+                    || (item.to === '/execution' && location.pathname.startsWith('/execution'));
                   return `nav-link${active ? ' active' : ''}`;
                 }}
               >

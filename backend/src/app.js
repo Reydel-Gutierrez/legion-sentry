@@ -14,6 +14,7 @@ const diagnosticsRoutes = require('./routes/diagnostics');
 const logsRoutes = require('./routes/logs');
 const devicesRoutes = require('./routes/devices');
 const interfacesRoutes = require('./routes/interfaces');
+const executionRoutes = require('./routes/execution');
 
 const app = express();
 
@@ -38,6 +39,7 @@ app.use('/api/mqtt', mqttRoutes);
 app.use('/api/diagnostics', diagnosticsRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/api/devices', devicesRoutes);
+app.use('/api/execution', executionRoutes);
 app.use('/api/interfaces', interfacesRoutes);
 
 app.use((err, _req, res, _next) => {

@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import SectionCard from '../components/common/SectionCard';
 import PageHeader from '../components/common/PageHeader';
 import StatusChip from '../components/common/StatusChip';
 import ActionButton from '../components/common/ActionButton';
 import DataTable from '../components/common/DataTable';
+import ProgressBar from '../components/common/ProgressBar';
 
 function formatLastSeen(iso) {
   if (!iso) return '—';
@@ -40,6 +41,7 @@ function PointsPanel({
   device,
   points,
   loading,
+  discoveryJob,
   onDiscover,
   onClear,
   onClose,
@@ -76,6 +78,20 @@ function PointsPanel({
       {!device.enabled && (
         <p className="text-muted mb-3">Enable this managed device before discovering points.</p>
       )}
+      {discoveryJob && !['completed', 'failed', 'cancelled'].includes(discoveryJob.status) && (
+        <div className="mb-3">
+          <ProgressBar
+            value={discoveryJob.progress}
+            label="Point discovery"
+            message={discoveryJob.progressMessage}
+          />
+        </div>
+      )}
+      {discoveryJob?.status === 'failed' && (
+        <div className="alert-sentry alert-sentry-error mb-3">
+          {discoveryJob.error || discoveryJob.progressMessage || 'Point discovery failed.'}
+        </div>
+      )}
       <DataTable
         columns={pointColumns}
         rows={points}
@@ -93,6 +109,8 @@ export default function ManagedDevicesPage() {
   const [message, setMessage] = useState(null);
   const [viewingDeviceId, setViewingDeviceId] = useState(null);
   const [pointsByDevice, setPointsByDevice] = useState({});
+  const [discoveryJobsByDevice, setDiscoveryJobsByDevice] = useState({});
+  const pollTimersRef = useRef({});
 
   const load = () => {
     api.getManagedDevices()
@@ -101,6 +119,71 @@ export default function ManagedDevicesPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => () => {
+    Object.values(pollTimersRef.current).forEach((timer) => clearInterval(timer));
+  }, []);
+
+  const stopDiscoveryPolling = (deviceId) => {
+    if (pollTimersRef.current[deviceId]) {
+      clearInterval(pollTimersRef.current[deviceId]);
+      delete pollTimersRef.current[deviceId];
+    }
+  };
+
+  const updateDiscoveryJob = (deviceId, job) => {
+    setDiscoveryJobsByDevice((prev) => ({
+      ...prev,
+      [deviceId]: {
+        jobId: job.id,
+        status: job.status,
+        progress: job.progress,
+        progressMessage: job.progressMessage,
+        error: job.error,
+      },
+    }));
+  };
+
+  const pollDiscoveryJob = (deviceId, jobId) => {
+    stopDiscoveryPolling(deviceId);
+    pollTimersRef.current[deviceId] = setInterval(async () => {
+      try {
+        const job = await api.getExecutionJob(jobId);
+        updateDiscoveryJob(deviceId, job);
+
+        if (job.status === 'completed') {
+          stopDiscoveryPolling(deviceId);
+          const result = job.result || {};
+          try {
+            await loadPoints(deviceId);
+          } catch {
+            setPointsByDevice((prev) => ({ ...prev, [deviceId]: result.points || [] }));
+          }
+          setViewingDeviceId(deviceId);
+          setMessage({
+            type: 'success',
+            text: result.message || `Discovered ${result.pointsFound ?? result.points?.length ?? 0} point(s).`,
+          });
+          setLoading(false);
+        } else if (job.status === 'failed' || job.status === 'cancelled') {
+          stopDiscoveryPolling(deviceId);
+          if (job.result?.points) {
+            setPointsByDevice((prev) => ({ ...prev, [deviceId]: job.result.points }));
+            setViewingDeviceId(deviceId);
+          }
+          setMessage({
+            type: 'error',
+            text: job.error || job.progressMessage || 'Point discovery failed.',
+          });
+          setLoading(false);
+        }
+      } catch (err) {
+        stopDiscoveryPolling(deviceId);
+        setMessage({ type: 'error', text: err.message });
+        setLoading(false);
+      }
+    }, 1000);
+  };
 
   const loadPoints = async (deviceId) => {
     const data = await api.getManagedDevicePoints(deviceId);
@@ -171,20 +254,20 @@ export default function ManagedDevicesPage() {
     setLoading(true);
     setMessage(null);
     try {
-      const result = await api.discoverManagedDevicePoints(device.id);
-      setPointsByDevice((prev) => ({ ...prev, [device.id]: result.points || [] }));
+      const result = await api.discoverManagedDevicePoints(device.id, { async: true });
+      const job = result.job;
+      if (!job?.id) {
+        throw new Error('Point discovery job was not created');
+      }
+      updateDiscoveryJob(device.id, job);
       setViewingDeviceId(device.id);
-      setMessage({
-        type: result.success === false ? 'error' : 'success',
-        text: result.message || `Discovered ${result.pointsFound ?? result.points?.length ?? 0} point(s).`,
-      });
+      pollDiscoveryJob(device.id, job.id);
     } catch (err) {
       if (err.body?.points) {
         setPointsByDevice((prev) => ({ ...prev, [device.id]: err.body.points }));
         setViewingDeviceId(device.id);
       }
       setMessage({ type: 'error', text: err.message });
-    } finally {
       setLoading(false);
     }
   };
@@ -237,12 +320,25 @@ export default function ManagedDevicesPage() {
       key: 'actions',
       header: '',
       align: 'right',
-      render: (device) => (
-        <div className="d-flex flex-wrap gap-2 justify-content-end">
+      render: (device) => {
+        const discoveryJob = discoveryJobsByDevice[device.id];
+        const discovering = discoveryJob
+          && !['completed', 'failed', 'cancelled'].includes(discoveryJob.status);
+        return (
+        <div className="d-flex flex-wrap gap-2 justify-content-end align-items-center">
+          {discovering && (
+            <div style={{ minWidth: '160px' }}>
+              <ProgressBar
+                value={discoveryJob.progress}
+                message={discoveryJob.progressMessage}
+                className="sentry-progress--compact"
+              />
+            </div>
+          )}
           <ActionButton
             size="sm"
             onClick={() => handleDiscoverPoints(device)}
-            disabled={loading || !device.enabled}
+            disabled={loading || !device.enabled || discovering}
             title={device.enabled ? 'Read objectList and point properties via MS/TP' : 'Enable device first'}
           >
             Discover Points
@@ -257,7 +353,8 @@ export default function ManagedDevicesPage() {
             Unmanage
           </ActionButton>
         </div>
-      ),
+        );
+      },
     },
   ];
 
@@ -290,6 +387,7 @@ export default function ManagedDevicesPage() {
           device={viewingDevice}
           points={pointsByDevice[viewingDevice.id] || []}
           loading={loading}
+          discoveryJob={discoveryJobsByDevice[viewingDevice.id]}
           onDiscover={() => handleDiscoverPoints(viewingDevice)}
           onClear={() => handleClearPoints(viewingDevice)}
           onClose={() => setViewingDeviceId(null)}

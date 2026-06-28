@@ -4,10 +4,14 @@ const logsService = require('./services/logs');
 const networkService = require('./services/network');
 
 const authService = require('./services/auth');
+const fieldExecutionEngine = require('./services/execution/fieldExecutionEngine');
+const pointPollingEngine = require('./services/execution/pointPollingEngine');
 
 app.listen(PORT, () => {
   authService.loadAuthConfig();
   logsService.seedStartupLog();
+  fieldExecutionEngine.startWorker();
+  pointPollingEngine.start();
   const manager = networkService.getNetworkManager();
   logsService.addLog({
     level: 'info',

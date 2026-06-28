@@ -5,6 +5,7 @@ import LoginPage from './pages/Login';
 import DashboardPage from './pages/Dashboard';
 import DevicesPage from './pages/Devices';
 import ManagedDevicesPage from './pages/ManagedDevices';
+import ExecutionPage from './pages/Execution';
 import DeviceDetailPage from './pages/DeviceDetail';
 import NetworkPage from './pages/Network';
 import BacnetIpPage from './pages/BacnetIp';
@@ -30,6 +31,7 @@ export default function App() {
         <Route index element={<DashboardPage />} />
         <Route path="devices" element={<DevicesPage />} />
         <Route path="managed-devices" element={<ManagedDevicesPage />} />
+        <Route path="execution" element={<ExecutionPage />} />
         <Route path="devices/:id" element={<DeviceDetailPage />} />
         <Route path="network" element={<NetworkPage />} />
         <Route path="bacnet" element={<Navigate to="/bacnet/ip" replace />} />

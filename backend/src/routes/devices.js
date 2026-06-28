@@ -2,6 +2,7 @@ const express = require('express');
 const deviceService = require('../services/devices');
 const managedDevices = require('../services/devices/managedDevices');
 const managedPoints = require('../services/devices/managedPoints');
+const fieldExecutionEngine = require('../services/execution/fieldExecutionEngine');
 const logsService = require('../services/logs');
 
 const router = express.Router();
@@ -66,7 +67,21 @@ router.get('/managed/:id/points', (req, res) => {
 
 router.post('/managed/:id/discover-points', async (req, res, next) => {
   try {
-    const result = await managedPoints.discoverPointsForManagedDevice(req.params.id);
+    const runAsync = req.body?.async === true;
+    const result = await fieldExecutionEngine.discoverPointsForManagedDevice(req.params.id, {
+      source: 'ui',
+      async: runAsync,
+    });
+
+    if (runAsync) {
+      logsService.addLog({
+        level: 'info',
+        service: 'bacnet',
+        message: `Point discovery job queued for managed device ${req.params.id} — ${result.jobId}`,
+      });
+      return res.json(result);
+    }
+
     logsService.addLog({
       level: 'info',
       service: 'bacnet',
@@ -81,6 +96,14 @@ router.post('/managed/:id/discover-points', async (req, res, next) => {
         message: `Point discovery failed for managed device ${req.params.id}: ${err.message}`,
       });
       return res.status(err.statusCode || 502).json(err.result);
+    }
+    if (err.job?.result) {
+      logsService.addLog({
+        level: 'error',
+        service: 'bacnet',
+        message: `Point discovery failed for managed device ${req.params.id}: ${err.message}`,
+      });
+      return res.status(err.statusCode || 502).json(err.job.result);
     }
     next(err);
   }

@@ -22,6 +22,8 @@ import {
   isMstp,
   mstpMac,
   mstpNetwork,
+  mstpParticipationLabel,
+  MSTP_PARTICIPATION_STATUS_META,
   validateMstpForm,
 } from './bacnetUtils';
 
@@ -478,7 +480,7 @@ export default function BacnetMstpPage() {
           <Form.Check
             type="checkbox"
             id="mstp-token-mode"
-            label="Token Mode (join MS/TP ring — Who-Is only while holding token)"
+            label="Token Mode (pre-listen, join active ring, or start idle ring — Who-Is only while holding token)"
             checked={Boolean(mstpForm.tokenMode)}
             onChange={(e) => updateMstp('tokenMode', e.target.checked)}
           />
@@ -555,13 +557,41 @@ export default function BacnetMstpPage() {
         <KvRow label="Token Mode" value={mstp.tokenMode ? 'Enabled' : 'Disabled'} />
         <KvRow
           label="Token Participation"
-          value={mstp.tokenParticipationImplemented ? 'Milestone 1 (discovery)' : 'Not implemented'}
+          value={mstp.tokenParticipationImplemented ? 'Sole-master startup supported' : 'Not implemented'}
         />
         {mstp.tokenEngine && (
-          <KvRow
-            label="Token Engine"
-            value={`${mstp.tokenEngine.state}${mstp.tokenEngine.holdingToken ? ' (holding)' : ''}`}
-          />
+          <>
+            <KvRow
+              label="Ring Participation"
+              value={(
+                <StatusChip
+                  tone={MSTP_PARTICIPATION_STATUS_META[mstp.tokenEngine.participationStatus]?.tone || 'neutral'}
+                  label={mstpParticipationLabel(mstp.tokenEngine.participationStatus)}
+                />
+              )}
+            />
+            <KvRow label="Startup Mode" value={mstp.tokenEngine.startupMode || '—'} />
+            <KvRow
+              label="Bus Activity Detected"
+              value={mstp.tokenEngine.busActivityDetected ? 'Yes' : 'No'}
+            />
+            <KvRow
+              label="Sole-Master Startup"
+              value={mstp.tokenEngine.soleMasterStartupActive ? 'Active' : 'No'}
+            />
+            <KvRow
+              label="Token Ring Established"
+              value={mstp.tokenEngine.tokenRingEstablished ? 'Yes' : 'No'}
+            />
+            <KvRow
+              label="Last Poll For Master"
+              value={mstp.tokenEngine.lastPollForMasterMac ?? '—'}
+            />
+            <KvRow
+              label="Token Engine State"
+              value={`${mstp.tokenEngine.state}${mstp.tokenEngine.holdingToken ? ' (holding)' : ''}`}
+            />
+          </>
         )}
         <KvRow label="Last Activity" value={formatTime(mstp.lastActivityAt)} />
         <KvRow label="Last Error" value={mstp.lastError || '—'} />

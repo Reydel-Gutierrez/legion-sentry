@@ -968,6 +968,12 @@ async function flushTokenEngineTx(tokenEngine, port, recordSessionLog) {
         sourceMac: frame[4],
         frameBytes: frame.length,
       });
+    } else if (frameType === MSTP_FRAME_TYPE.POLL_FOR_MASTER) {
+      recordSessionLog('info', `Poll For Master transmitted to MAC ${frame[3]}`, {
+        destinationMac: frame[3],
+        sourceMac: frame[4],
+        frameBytes: frame.length,
+      });
     } else if (
       frameType === MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY
       || frameType === MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY
@@ -994,6 +1000,7 @@ function createDiscoveryTokenEngine(config, recordSessionLog) {
     maxMaster: config.maxMaster,
     maxInfoFrames: config.maxInfoFrames,
     baudRate: config.baudRate,
+    preListenMs: config.preListenMs,
     buildFrame: (frameType, destination, source, data) => buildMstpFrame(
       frameType,
       destination,
@@ -1110,7 +1117,10 @@ async function discover(input = {}) {
     if (useTokenMode) {
       tokenEngine = createDiscoveryTokenEngine(config, recordSessionLog);
       activeDiscovery.tokenEngine = tokenEngine;
-      recordSessionLog('info', `Token mode engaged — joining MS/TP ring as master MAC ${config.macAddress} (Who-Is only while holding token)`);
+      recordSessionLog('info', `Token mode engaged — master MAC ${config.macAddress}, pre-listen ${preListenMs}ms before sole-master startup if bus is idle (Who-Is only while holding token)`);
+      engineTickTimer = setInterval(() => {
+        scheduleTokenEngineWork(tokenEngine, port, recordSessionLog);
+      }, Math.max(1, Math.floor(tokenEngine.tSlot)));
     }
 
     dataListener = (chunk) => {
@@ -1279,17 +1289,13 @@ async function discover(input = {}) {
       scheduleTokenEngineWork(tokenEngine, port, recordSessionLog);
     };
 
-    // Optional pre-listen delay: capture bus traffic before queueing/transmitting.
-    if (preListenMs > 0) {
+    // Send-only mode: optional pre-listen before transmitting Who-Is on the bus.
+    if (!useTokenMode && preListenMs > 0) {
       recordSessionLog('info', `Pre-listen delay ${preListenMs}ms before Who-Is`);
       await delay(preListenMs);
     }
 
     if (useTokenMode) {
-      engineTickTimer = setInterval(() => {
-        scheduleTokenEngineWork(tokenEngine, port, recordSessionLog);
-      }, Math.max(1, Math.floor(tokenEngine.tSlot)));
-
       queueWhoIsForToken();
       if (whoIsRetries > 1) {
         whoIsQueueTimer = setInterval(() => {
@@ -1779,6 +1785,7 @@ async function discoverPointsForDevice(options = {}) {
     engineTickTimer = setInterval(() => {
       scheduleTokenEngineWork(tokenEngine, port, recordLog);
     }, Math.max(1, Math.floor(tokenEngine.tSlot)));
+    recordLog('info', `Point discovery token engine started — pre-listen ${config.preListenMs ?? DEFAULT_PRE_LISTEN_MS}ms before sole-master startup if bus is idle`);
 
     const sessionDeadline = Date.now() + sessionTimeoutMs;
     const ensureSessionTime = () => {

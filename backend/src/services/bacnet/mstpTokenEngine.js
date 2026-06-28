@@ -1,10 +1,13 @@
 /**
- * BACnet MS/TP master token engine — milestone 1.
+ * BACnet MS/TP master token engine.
  *
- * Participates on the token ring without sole-master token generation:
+ * Participates on the token ring and can safely start token circulation on an
+ * idle trunk after a configurable pre-listen window:
+ * - Pre-listens for existing ring activity before transmitting
+ * - Joins an active ring when token/PFM/data frames are observed
+ * - Enters sole-master startup when the bus stays quiet
  * - Responds to Poll For Master addressed to this station
- * - Accepts tokens addressed to this station
- * - Sends queued Who-Is only while holding the token
+ * - Accepts tokens, sends queued BACnet frames only while holding token
  * - Passes the token to the next master
  */
 
@@ -12,6 +15,8 @@ const MSTP_FRAME_TYPE = {
   TOKEN: 0x00,
   POLL_FOR_MASTER: 0x01,
   REPLY_TO_POLL_FOR_MASTER: 0x02,
+  BACNET_DATA_EXPECTING_REPLY: 0x05,
+  BACNET_DATA_NOT_EXPECTING_REPLY: 0x06,
 };
 
 const MSTP_STATE = {
@@ -20,6 +25,12 @@ const MSTP_STATE = {
   USE_TOKEN: 'use-token',
   PASS_TOKEN: 'pass-token',
   DUPLICATE_TOKEN: 'duplicate-token',
+};
+
+const STARTUP_MODE = {
+  PRE_LISTEN: 'pre-listen',
+  JOIN_RING: 'join-ring',
+  SOLE_MASTER_STARTUP: 'sole-master-startup',
 };
 
 function tSlotMsForBaud(baudRate) {
@@ -41,6 +52,27 @@ function incrementMasterMac(mac, maxMaster) {
   return next;
 }
 
+function isValidMstpActivityFrame(frame) {
+  if (!frame?.headerCrcValid) return false;
+
+  if (
+    frame.frameType === MSTP_FRAME_TYPE.TOKEN
+    || frame.frameType === MSTP_FRAME_TYPE.POLL_FOR_MASTER
+    || frame.frameType === MSTP_FRAME_TYPE.REPLY_TO_POLL_FOR_MASTER
+  ) {
+    return frame.dataLength === 0;
+  }
+
+  if (
+    frame.frameType === MSTP_FRAME_TYPE.BACNET_DATA_EXPECTING_REPLY
+    || frame.frameType === MSTP_FRAME_TYPE.BACNET_DATA_NOT_EXPECTING_REPLY
+  ) {
+    return frame.dataLength > 0 && frame.dataCrcValid !== false;
+  }
+
+  return false;
+}
+
 class MstpTokenEngine {
   /**
    * @param {object} options
@@ -48,6 +80,7 @@ class MstpTokenEngine {
    * @param {number} options.maxMaster - Max_Master
    * @param {number} options.maxInfoFrames - Max_Info_Frames
    * @param {number} options.baudRate
+   * @param {number} [options.preListenMs=1000] - Quiet-bus listen window before sole-master startup
    * @param {(frameType:number, dest:number, src:number, data?:Buffer) => Buffer} options.buildFrame
    * @param {(level:string, message:string, extra?:object) => void} [options.onLog]
    * @param {(from:string, to:string, extra?:object) => void} [options.onStateChange]
@@ -57,6 +90,7 @@ class MstpTokenEngine {
     this.maxMaster = options.maxMaster;
     this.maxInfoFrames = Math.max(1, options.maxInfoFrames || 1);
     this.baudRate = options.baudRate || 38400;
+    this.preListenMs = Math.max(0, options.preListenMs ?? 1000);
     this.buildFrame = options.buildFrame;
     this.onLog = options.onLog || (() => {});
     this.onStateChange = options.onStateChange || (() => {});
@@ -64,8 +98,16 @@ class MstpTokenEngine {
     this.tSlot = tSlotMsForBaud(this.baudRate);
     this.tUsage = 35 * this.tSlot;
     this.tTurnaround = turnaroundMsForBaud(this.baudRate);
+    this.tPoll = 50 * this.tSlot;
 
     this.state = MSTP_STATE.INITIALIZE;
+    this.startupMode = STARTUP_MODE.PRE_LISTEN;
+    this.busActivityDetected = false;
+    this.soleMasterStartupActive = false;
+    this.lastPollForMasterMac = null;
+    this.tokenRingEstablished = false;
+    this.preListenStartedAt = Date.now();
+
     this.nextStation = incrementMasterMac(this.macAddress, this.maxMaster);
     this.pollStation = this.nextStation;
     this.frameCount = 0;
@@ -78,6 +120,11 @@ class MstpTokenEngine {
 
     this.bacnetFrameQueue = [];
     this.pendingPassToken = false;
+    this.pendingPollForMaster = false;
+    this.waitingForPfmReply = false;
+    this.pfmSentAt = null;
+    this.pfmReplyFromMac = null;
+
     // When we transmit a reply-expected BACnet frame (e.g. a confirmed
     // ReadProperty), MS/TP requires us to keep the token and wait for the peer
     // to reply before passing it on. Treply is bounded (255 ms by spec).
@@ -89,12 +136,22 @@ class MstpTokenEngine {
       tokensPassed: 0,
       pollForMasterReceived: 0,
       pollForMasterReplied: 0,
+      pollForMasterSent: 0,
       whoIsSentWhileHoldingToken: 0,
       duplicateTokens: 0,
       ringTokensObserved: 0,
     };
 
-    this._transition(MSTP_STATE.IDLE, 'engine started — listening on token ring');
+    this._transition(MSTP_STATE.IDLE, 'engine started — pre-listening for MS/TP activity');
+  }
+
+  getParticipationStatus() {
+    if (this.startupMode === STARTUP_MODE.PRE_LISTEN) return 'listening-only';
+    if (this.startupMode === STARTUP_MODE.SOLE_MASTER_STARTUP) return 'starting-idle-ring';
+    if (this.state === MSTP_STATE.PASS_TOKEN) return 'passing-token';
+    if (this.holdingToken && this.state === MSTP_STATE.USE_TOKEN) return 'holding-token';
+    if (this.startupMode === STARTUP_MODE.JOIN_RING && !this.holdingToken) return 'joining-active-ring';
+    return 'listening-only';
   }
 
   getSnapshot() {
@@ -105,12 +162,20 @@ class MstpTokenEngine {
       nextStation: this.nextStation,
       pollStation: this.pollStation,
       seenRingActivity: this.seenRingActivity,
+      startupMode: this.startupMode,
+      busActivityDetected: this.busActivityDetected,
+      soleMasterStartupActive: this.soleMasterStartupActive,
+      lastPollForMasterMac: this.lastPollForMasterMac,
+      tokenRingEstablished: this.tokenRingEstablished,
+      participationStatus: this.getParticipationStatus(),
       bacnetFramesQueued: this.bacnetFrameQueue.length,
       stats: { ...this.stats },
       timings: {
         tSlotMs: this.tSlot,
         tUsageMs: this.tUsage,
-        turnaroundMs: this.tTurnaround,
+        tTurnaroundMs: this.tTurnaround,
+        tPollMs: this.tPoll,
+        preListenMs: this.preListenMs,
       },
     };
   }
@@ -125,6 +190,76 @@ class MstpTokenEngine {
     this.onLog('debug', `${label} frame queued for token-gated send (${this.bacnetFrameQueue.length} in queue)`);
   }
 
+  _markBusActivity(frame) {
+    // An expected Reply To Poll For Master during our own sole-master poll is not
+    // evidence of a foreign active ring — do not abort startup for it.
+    if (
+      this.soleMasterStartupActive
+      && this.waitingForPfmReply
+      && frame?.frameType === MSTP_FRAME_TYPE.REPLY_TO_POLL_FOR_MASTER
+      && frame.destination === this.macAddress
+    ) {
+      this.seenRingActivity = true;
+      return;
+    }
+
+    if (!this.busActivityDetected) {
+      this.busActivityDetected = true;
+      if (this.startupMode === STARTUP_MODE.PRE_LISTEN) {
+        this._enterJoinRing('bus activity detected during pre-listen — joining existing ring');
+      } else if (this.startupMode === STARTUP_MODE.SOLE_MASTER_STARTUP) {
+        this._abortSoleMasterStartup('bus activity detected during sole-master startup — joining existing ring');
+      }
+    }
+
+    if (
+      frame?.frameType === MSTP_FRAME_TYPE.TOKEN
+      || frame?.frameType === MSTP_FRAME_TYPE.POLL_FOR_MASTER
+      || frame?.frameType === MSTP_FRAME_TYPE.REPLY_TO_POLL_FOR_MASTER
+    ) {
+      this.seenRingActivity = true;
+    }
+  }
+
+  _enterJoinRing(reason) {
+    this.startupMode = STARTUP_MODE.JOIN_RING;
+    this.soleMasterStartupActive = false;
+    this.pendingPollForMaster = false;
+    this.waitingForPfmReply = false;
+    this.pfmSentAt = null;
+    this.pfmReplyFromMac = null;
+    this.onLog('info', reason);
+  }
+
+  _abortSoleMasterStartup(reason) {
+    this.soleMasterStartupActive = false;
+    this.pendingPollForMaster = false;
+    this.waitingForPfmReply = false;
+    this.pfmSentAt = null;
+    this.pfmReplyFromMac = null;
+    this._enterJoinRing(reason);
+  }
+
+  _beginSoleMasterStartup(nowMs) {
+    this.startupMode = STARTUP_MODE.SOLE_MASTER_STARTUP;
+    this.soleMasterStartupActive = true;
+    this.pollStation = incrementMasterMac(this.macAddress, this.maxMaster);
+    this.pendingPollForMaster = true;
+    this.waitingForPfmReply = false;
+    this.pfmSentAt = null;
+    this.pfmReplyFromMac = null;
+    this.lastSilenceAt = nowMs;
+    this.onLog('info', 'No MS/TP activity detected during pre-listen');
+    this.onLog('info', 'Starting sole-master token generation');
+  }
+
+  _establishTokenRing(reason) {
+    if (!this.tokenRingEstablished) {
+      this.tokenRingEstablished = true;
+      this.onLog('info', 'Token ring established', { reason });
+    }
+  }
+
   /**
    * Process a parsed MS/TP frame from the bus.
    * @param {object} frame
@@ -135,9 +270,16 @@ class MstpTokenEngine {
 
     this.lastSilenceAt = Date.now();
 
+    if (isValidMstpActivityFrame(frame)) {
+      this._markBusActivity(frame);
+    }
+
     if (frame.frameType === MSTP_FRAME_TYPE.TOKEN && frame.dataLength === 0) {
-      this.seenRingActivity = true;
       this.stats.ringTokensObserved += 1;
+
+      if (this.soleMasterStartupActive) {
+        this._abortSoleMasterStartup('token observed during sole-master startup — joining existing ring');
+      }
 
       if (frame.destination === this.macAddress) {
         this._onTokenForUs(frame);
@@ -151,7 +293,10 @@ class MstpTokenEngine {
     }
 
     if (frame.frameType === MSTP_FRAME_TYPE.POLL_FOR_MASTER && frame.dataLength === 0) {
-      this.seenRingActivity = true;
+      if (this.soleMasterStartupActive) {
+        this._abortSoleMasterStartup('Poll For Master observed during sole-master startup — joining existing ring');
+      }
+
       if (frame.destination === this.macAddress) {
         return this._onPollForMaster(frame);
       }
@@ -159,7 +304,18 @@ class MstpTokenEngine {
     }
 
     if (frame.frameType === MSTP_FRAME_TYPE.REPLY_TO_POLL_FOR_MASTER && frame.dataLength === 0) {
-      this.seenRingActivity = true;
+      if (
+        this.soleMasterStartupActive
+        && this.waitingForPfmReply
+        && frame.destination === this.macAddress
+      ) {
+        this.pfmReplyFromMac = frame.source;
+        this.onLog('info', `Master MAC ${frame.source} replied`, {
+          masterMac: frame.source,
+          polledMac: this.lastPollForMasterMac,
+        });
+      }
+      return null;
     }
 
     // A data-bearing frame received while we are holding the token waiting for
@@ -183,8 +339,27 @@ class MstpTokenEngine {
    * @returns {Buffer|null}
    */
   poll(nowMs = Date.now()) {
+    if (this.startupMode === STARTUP_MODE.PRE_LISTEN) {
+      if (nowMs >= this.preListenStartedAt + this.preListenMs) {
+        if (!this.busActivityDetected) {
+          this._beginSoleMasterStartup(nowMs);
+        } else {
+          this._enterJoinRing('pre-listen complete — joining active ring');
+        }
+      } else {
+        return null;
+      }
+    }
+
     if (!this._turnaroundElapsed(nowMs)) {
       return null;
+    }
+
+    if (this.startupMode === STARTUP_MODE.SOLE_MASTER_STARTUP) {
+      const soleMasterFrame = this._pollSoleMasterStartup(nowMs);
+      if (soleMasterFrame) {
+        return soleMasterFrame;
+      }
     }
 
     if (this.pendingPassToken) {
@@ -243,12 +418,95 @@ class MstpTokenEngine {
     return null;
   }
 
+  _pollSoleMasterStartup(nowMs) {
+    if (this.pfmReplyFromMac != null) {
+      const replyingMac = this.pfmReplyFromMac;
+      this.pfmReplyFromMac = null;
+      this.soleMasterStartupActive = false;
+      this.waitingForPfmReply = false;
+      this.pendingPollForMaster = false;
+      this.startupMode = STARTUP_MODE.JOIN_RING;
+      this.nextStation = replyingMac;
+      this._establishTokenRing('another master replied during sole-master poll');
+      this.onLog('info', `Passing token to discovered master MAC ${replyingMac}`, {
+        destinationMac: replyingMac,
+      });
+      return this._emitPassTokenTo(replyingMac);
+    }
+
+    if (this.waitingForPfmReply) {
+      if (nowMs < this.pfmSentAt + this.tPoll) {
+        return null;
+      }
+
+      this.waitingForPfmReply = false;
+      this.onLog('debug', `No reply from master MAC ${this.lastPollForMasterMac} within Tpoll`, {
+        polledMac: this.lastPollForMasterMac,
+      });
+
+      this.pollStation = incrementMasterMac(this.pollStation, this.maxMaster);
+      if (this.pollStation === this.macAddress) {
+        return this._claimTokenAsSoleMaster(nowMs);
+      }
+
+      this.pendingPollForMaster = true;
+    }
+
+    if (this.pendingPollForMaster) {
+      return this._emitPollForMaster(nowMs);
+    }
+
+    return null;
+  }
+
+  _emitPollForMaster(nowMs) {
+    const dest = this.pollStation;
+    this.pendingPollForMaster = false;
+    this.waitingForPfmReply = true;
+    this.pfmSentAt = nowMs;
+    this.lastPollForMasterMac = dest;
+    this.stats.pollForMasterSent += 1;
+
+    this.onLog('info', `Polling for master MAC ${dest}`, {
+      destinationMac: dest,
+      sourceMac: this.macAddress,
+    });
+
+    return this.buildFrame(
+      MSTP_FRAME_TYPE.POLL_FOR_MASTER,
+      dest,
+      this.macAddress,
+    );
+  }
+
+  _claimTokenAsSoleMaster(nowMs) {
+    this.soleMasterStartupActive = false;
+    this.waitingForPfmReply = false;
+    this.pendingPollForMaster = false;
+    this.startupMode = STARTUP_MODE.JOIN_RING;
+    this.nextStation = incrementMasterMac(this.macAddress, this.maxMaster);
+    this._establishTokenRing('no other masters replied — holding token locally');
+
+    this.holdingToken = true;
+    this.tokenReceivedAt = nowMs;
+    this.frameCount = 0;
+    this.stats.tokensReceived += 1;
+    this._transition(MSTP_STATE.USE_TOKEN, 'created token locally as sole master');
+
+    this.onLog('info', `Token claimed locally for MAC ${this.macAddress}`, {
+      macAddress: this.macAddress,
+    });
+
+    return null;
+  }
+
   _turnaroundElapsed(nowMs) {
     return nowMs >= this.lastSilenceAt + this.tTurnaround;
   }
 
   _onTokenForUs(frame) {
     this.stats.tokensReceived += 1;
+    this._establishTokenRing('token received from active ring');
     this.onLog('info', `Token received for local MAC ${this.macAddress}`, {
       sourceMac: frame.source,
       destinationMac: frame.destination,
@@ -266,7 +524,7 @@ class MstpTokenEngine {
     this.holdingToken = true;
     this.tokenReceivedAt = Date.now();
     this.frameCount = 0;
-    this._transition(MSTP_STATE.USE_TOKEN, 'token accepted — may send queued Who-Is');
+    this._transition(MSTP_STATE.USE_TOKEN, 'token accepted — may send queued BACnet frames');
   }
 
   _onPollForMaster(frame) {
@@ -289,11 +547,14 @@ class MstpTokenEngine {
   }
 
   _emitPassToken() {
+    return this._emitPassTokenTo(this.nextStation);
+  }
+
+  _emitPassTokenTo(dest) {
     if (this.state === MSTP_STATE.PASS_TOKEN) {
       return null;
     }
 
-    const dest = this.nextStation;
     const tokenFrame = this.buildFrame(
       MSTP_FRAME_TYPE.TOKEN,
       dest,
@@ -302,7 +563,7 @@ class MstpTokenEngine {
 
     this.tokenCount += 1;
     this.stats.tokensPassed += 1;
-    this.nextStation = incrementMasterMac(this.nextStation, this.maxMaster);
+    this.nextStation = incrementMasterMac(dest, this.maxMaster);
     this.pollStation = incrementMasterMac(this.pollStation, this.maxMaster);
 
     this.onLog('info', `Token passed to MAC ${dest}`, {
@@ -332,6 +593,9 @@ module.exports = {
   MstpTokenEngine,
   MSTP_STATE,
   MSTP_FRAME_TYPE,
+  STARTUP_MODE,
   tSlotMsForBaud,
   turnaroundMsForBaud,
+  incrementMasterMac,
+  isValidMstpActivityFrame,
 };

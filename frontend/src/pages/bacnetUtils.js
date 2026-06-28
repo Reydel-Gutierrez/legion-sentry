@@ -31,6 +31,18 @@ export const MSTP_STATUS_META = {
   never_confirmed: { tone: 'neutral', label: 'Unknown' },
 };
 
+export const MSTP_PARTICIPATION_STATUS_META = {
+  'listening-only': { tone: 'neutral', label: 'Listening only' },
+  'joining-active-ring': { tone: 'warn', label: 'Joining active ring' },
+  'starting-idle-ring': { tone: 'warn', label: 'Starting idle ring' },
+  'holding-token': { tone: 'success', label: 'Holding token' },
+  'passing-token': { tone: 'neutral', label: 'Passing token' },
+};
+
+export function mstpParticipationLabel(status) {
+  return MSTP_PARTICIPATION_STATUS_META[status]?.label || status || '—';
+}
+
 export function isMstp(device) {
   return device.transport === 'BACnet MS/TP' || device.transport === 'mstp';
 }

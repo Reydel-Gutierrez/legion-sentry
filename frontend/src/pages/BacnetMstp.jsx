@@ -262,9 +262,10 @@ export default function BacnetMstpPage() {
     if (!confirmMstpAction(validation)) return;
 
     setLoading(true);
-    if (validation.warnings.length === 0) {
-      setMessage(null);
-    }
+    setMessage({
+      type: 'info',
+      text: 'Pausing field execution and polling so MS/TP discovery can use the bus…',
+    });
     try {
       const result = await api.discoverBacnetMstp(buildDiscoverPayload(mstpForm));
       await load();
@@ -273,10 +274,13 @@ export default function BacnetMstpPage() {
       const totalInventory = result.inventoryTotals?.mstp ?? '—';
       setMissedDevices(missed);
       const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : '';
+      const coordinationText = result.coordination?.message
+        ? ` ${result.coordination.message}. Execution resumed.`
+        : '';
       const summaryText = `Discovery complete — ${seen} device(s) seen, ${missed.length} not rediscovered, ${totalInventory} in inventory (${result.durationMs}ms).`;
       setMessage({
         type: seen > 0 ? 'success' : 'info',
-        text: `${summaryText}${warningText}`,
+        text: `${summaryText}${coordinationText}${warningText}`,
       });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });

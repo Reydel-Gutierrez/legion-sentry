@@ -3,6 +3,7 @@ const managedPoints = require('../devices/managedPoints');
 const managedDevices = require('../devices/managedDevices');
 const pointsStore = require('../devices/managedPointsStore');
 const bacnetMstpService = require('../bacnet/bacnetMstp.service');
+const mstpBusCoordinator = require('./mstpBusCoordinator');
 const { BACNET_PROPERTIES } = require('../bacnet/bacnetApduCodec');
 
 const JOB_TYPES = Object.freeze({
@@ -38,11 +39,51 @@ const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_POINT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 const WORKER_INTERVAL_MS = 100;
 const JOB_WAIT_POLL_MS = 250;
+const MAX_JOBS_RETAINED = 500;
+const JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const QUEUE_WARN_THRESHOLD = 50;
+const ACTIVE_JOB_WAIT_MS = 30000;
 
 let activeJobId = null;
 let workerTimer = null;
 let workerRunning = false;
+let executionPaused = false;
 const cancelFlags = new Map();
+
+function lazyPointPollingEngine() {
+  // eslint-disable-next-line global-require
+  return require('./pointPollingEngine');
+}
+
+function isActiveStatus(status) {
+  return [JOB_STATUS.WAITING_TOKEN, JOB_STATUS.EXECUTING, JOB_STATUS.RETRYING].includes(status);
+}
+
+function trimJobs(jobs) {
+  const now = Date.now();
+  const active = jobs.filter((job) => !isTerminalStatus(job.status) || job.id === activeJobId);
+
+  const terminal = jobs.filter((job) => isTerminalStatus(job.status) && job.id !== activeJobId);
+  const recentTerminal = terminal.filter((job) => {
+    const stamp = job.completedAt || job.cancelledAt || job.createdAt;
+    if (!stamp) return true;
+    return now - new Date(stamp).getTime() < JOB_MAX_AGE_MS;
+  });
+
+  let combined = [...active, ...recentTerminal];
+  combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  if (combined.length > MAX_JOBS_RETAINED) {
+    const keepIds = new Set(combined.slice(0, MAX_JOBS_RETAINED).map((job) => job.id));
+    combined = combined.filter((job) => keepIds.has(job.id) || !isTerminalStatus(job.status));
+  }
+
+  return combined;
+}
+
+function saveJobsTrimmed(jobs) {
+  jobsStore.saveJobs(trimJobs(jobs));
+}
 
 function useMockData() {
   return process.env.MOCK_DATA === 'true';
@@ -71,12 +112,8 @@ function persistJob(job) {
   } else {
     jobs.push(job);
   }
-  jobsStore.saveJobs(jobs);
+  saveJobsTrimmed(jobs);
   return job;
-}
-
-function readJobRecord(id) {
-  return jobsStore.loadJobs().find((job) => job.id === id) || null;
 }
 
 function updateJob(id, patch) {
@@ -85,12 +122,50 @@ function updateJob(id, patch) {
   if (index < 0) return null;
   const next = { ...jobs[index], ...patch };
   jobs[index] = next;
-  jobsStore.saveJobs(jobs);
+  saveJobsTrimmed(jobs);
   return next;
 }
 
-function shouldCancelJob(id) {
-  return Boolean(cancelFlags.get(id));
+function readJobRecord(id) {
+  return jobsStore.loadJobs().find((job) => job.id === id) || null;
+}
+
+function countPollingPendingJobs() {
+  return jobsStore.loadJobs().filter((job) => job.source === 'polling'
+    && (job.status === JOB_STATUS.QUEUED
+      || isActiveStatus(job.status))).length;
+}
+
+function pauseForDiscovery() {
+  executionPaused = true;
+}
+
+function resumeFromDiscovery() {
+  executionPaused = false;
+}
+
+function isExecutionPaused() {
+  return executionPaused || mstpBusCoordinator.isExecutionPaused();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+async function waitForIdleOrCancel(timeoutMs = ACTIVE_JOB_WAIT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  while (activeJobId && Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    await delay(250);
+  }
+  if (activeJobId) {
+    cancelJob(activeJobId);
+    const waitDeadline = Date.now() + 5000;
+    while (activeJobId && Date.now() < waitDeadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await delay(250);
+    }
+  }
 }
 
 function sortQueuedJobs(jobs) {
@@ -133,6 +208,10 @@ function enrichJobForApi(job) {
       ? `MAC ${device.mstpMacAddress} (${device.deviceInstance})`
       : null,
   };
+}
+
+function shouldCancelJob(id) {
+  return Boolean(cancelFlags.get(id));
 }
 
 function createJob(payload = {}) {
@@ -236,10 +315,30 @@ function cancelJob(id) {
 
 function clearCompletedJobs() {
   const jobs = jobsStore.loadJobs();
-  const remaining = jobs.filter((job) => !isTerminalStatus(job.status));
+  const remaining = jobs.filter((job) => job.status !== JOB_STATUS.COMPLETED);
   const removed = jobs.length - remaining.length;
-  jobsStore.saveJobs(remaining);
+  saveJobsTrimmed(remaining);
   return { removed, remaining: remaining.length };
+}
+
+function clearFailedJobs() {
+  const jobs = jobsStore.loadJobs();
+  const remaining = jobs.filter((job) => job.status !== JOB_STATUS.FAILED);
+  const removed = jobs.length - remaining.length;
+  saveJobsTrimmed(remaining);
+  return { removed, remaining: remaining.length };
+}
+
+function cancelQueuedJobs() {
+  const jobs = jobsStore.loadJobs();
+  let cancelled = 0;
+  for (const job of jobs) {
+    if (job.status === JOB_STATUS.QUEUED) {
+      cancelJob(job.id);
+      cancelled += 1;
+    }
+  }
+  return { cancelled };
 }
 
 function getExecutionStatus() {
@@ -247,6 +346,12 @@ function getExecutionStatus() {
   const counts = summarizeJobs(jobs);
   const activeJob = activeJobId ? getJobById(activeJobId) : null;
   const queuedNext = sortQueuedJobs(jobs)[0] || null;
+  const pollingQueued = countPollingPendingJobs();
+  const coordinator = mstpBusCoordinator.getCoordinatorStatus();
+  const polling = lazyPointPollingEngine().getStatus();
+  const paused = isExecutionPaused();
+  const queueOverLimit = counts.queued >= QUEUE_WARN_THRESHOLD
+    || pollingQueued >= QUEUE_WARN_THRESHOLD;
 
   return {
     running: Boolean(activeJobId),
@@ -257,8 +362,23 @@ function getExecutionStatus() {
     completedJobs: counts.completed,
     failedJobs: counts.failed,
     cancelledJobs: counts.cancelled,
+    pollingQueuedJobs: pollingQueued,
     nextQueuedJobId: queuedNext?.id || null,
     workerIntervalMs: WORKER_INTERVAL_MS,
+    executionPaused: paused,
+    pauseMessage: paused ? (coordinator.pauseMessage || 'Paused — discovery running') : null,
+    bus: coordinator,
+    polling,
+    queueHealth: {
+      queued: counts.queued,
+      pollingQueued,
+      failed: counts.failed,
+      warnThreshold: QUEUE_WARN_THRESHOLD,
+      overLimit: queueOverLimit,
+      warning: queueOverLimit
+        ? `Queue has ${counts.queued} queued job(s); polling may be throttled`
+        : null,
+    },
   };
 }
 
@@ -398,6 +518,9 @@ async function runJobAttempt(job) {
 }
 
 async function processActiveJob(job) {
+  const busOwner = mstpBusCoordinator.ownerForJobType(job.type);
+  mstpBusCoordinator.acquireBus(busOwner);
+
   const startedAt = new Date().toISOString();
   updateJob(job.id, {
     status: JOB_STATUS.EXECUTING,
@@ -409,53 +532,61 @@ async function processActiveJob(job) {
   let lastError = null;
   const maxAttempts = Math.max(1, (job.maxRetries ?? DEFAULT_MAX_RETRIES) + 1);
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    const current = readJobRecord(job.id);
-    if (!current || shouldCancelJob(job.id)) {
-      throw createCancellationError();
-    }
-
-    if (attempt > 1) {
-      updateJob(job.id, {
-        status: JOB_STATUS.RETRYING,
-        progressMessage: `Retrying (${attempt - 1}/${job.maxRetries})`,
-        attempts: attempt,
-      });
-    }
-
-    try {
-      const result = await runJobAttempt(readJobRecord(job.id));
-      const completedAt = new Date().toISOString();
-      cancelFlags.delete(job.id);
-      return updateJob(job.id, {
-        status: JOB_STATUS.COMPLETED,
-        result,
-        error: null,
-        progress: 100,
-        progressMessage: 'Completed',
-        completedAt,
-      });
-    } catch (err) {
-      lastError = err;
-      if (err.code === 'JOB_CANCELLED' || shouldCancelJob(job.id)) {
+  try {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const current = readJobRecord(job.id);
+      if (!current || shouldCancelJob(job.id)) {
         throw createCancellationError();
       }
-      if (attempt < maxAttempts) {
+
+      if (attempt > 1) {
         updateJob(job.id, {
-          error: err.message,
-          progressMessage: `Attempt ${attempt} failed: ${err.message}`,
+          status: JOB_STATUS.RETRYING,
+          progressMessage: `Retrying (${attempt - 1}/${job.maxRetries})`,
+          attempts: attempt,
         });
-      } else if (err.result) {
-        lastError.result = err.result;
+      }
+
+      try {
+        const result = await runJobAttempt(readJobRecord(job.id));
+        const completedAt = new Date().toISOString();
+        cancelFlags.delete(job.id);
+        if (job.source === 'polling' && job.managedPointId) {
+          lazyPointPollingEngine().recordPollSuccess(job.managedPointId);
+        }
+        return updateJob(job.id, {
+          status: JOB_STATUS.COMPLETED,
+          result,
+          error: null,
+          progress: 100,
+          progressMessage: 'Completed',
+          completedAt,
+        });
+      } catch (err) {
+        lastError = err;
+        if (err.code === 'JOB_CANCELLED' || shouldCancelJob(job.id)) {
+          throw createCancellationError();
+        }
+        if (attempt < maxAttempts) {
+          updateJob(job.id, {
+            error: err.message,
+            progressMessage: `Attempt ${attempt} failed: ${err.message}`,
+          });
+        } else if (err.result) {
+          lastError.result = err.result;
+        }
       }
     }
-  }
 
-  throw lastError || new Error('Job failed');
+    throw lastError || new Error('Job failed');
+  } finally {
+    mstpBusCoordinator.releaseBus(busOwner);
+  }
 }
 
 async function workerTick() {
   if (workerRunning || activeJobId) return;
+  if (!mstpBusCoordinator.canStartExecutionJob()) return;
 
   const next = sortQueuedJobs(jobsStore.loadJobs())[0];
   if (!next) return;
@@ -477,6 +608,9 @@ async function workerTick() {
       });
     } else {
       const current = readJobRecord(next.id);
+      if (next.source === 'polling' && next.managedPointId) {
+        lazyPointPollingEngine().recordPollFailure(next.managedPointId);
+      }
       updateJob(next.id, {
         status: JOB_STATUS.FAILED,
         error: err.message || 'Job failed',
@@ -502,6 +636,8 @@ function scheduleWorker() {
 }
 
 function startWorker() {
+  const jobs = jobsStore.loadJobs();
+  saveJobsTrimmed(jobs);
   scheduleWorker();
 }
 
@@ -603,12 +739,18 @@ module.exports = {
   getJobs,
   getJobById,
   cancelJob,
+  cancelQueuedJobs,
   clearCompletedJobs,
+  clearFailedJobs,
   getExecutionStatus,
   startWorker,
   stopWorker,
   waitForJob,
+  waitForIdleOrCancel,
+  pauseForDiscovery,
+  resumeFromDiscovery,
   discoverPointsForManagedDevice,
   submitReadProperty,
   hasPendingJobForPoint,
+  countPollingPendingJobs,
 };

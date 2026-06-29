@@ -3,6 +3,7 @@ const bacnetService = require('../services/bacnet');
 const bacnetIpService = require('../services/bacnet/bacnetIp.service');
 const bacnetMstpService = require('../services/bacnet/bacnetMstp.service');
 const deviceService = require('../services/devices');
+const mstpBusCoordinator = require('../services/execution/mstpBusCoordinator');
 const logsService = require('../services/logs');
 
 const router = express.Router();
@@ -117,6 +118,9 @@ router.post('/mstp/discover', async (req, res, next) => {
   });
 
   try {
+    await mstpBusCoordinator.prepareForDiscovery();
+    mstpBusCoordinator.acquireBus(mstpBusCoordinator.BUS_OWNER.DISCOVERY);
+
     const discovery = await bacnetMstpService.discover(req.body || {});
 
     // Always ingest, even when zero devices answered, so that missed-scan
@@ -150,6 +154,11 @@ router.post('/mstp/discover', async (req, res, next) => {
       latestDiscoverySessionId: inventory?.latestDiscoverySessionId
         || discovery.discoverySessionId
         || null,
+      coordination: {
+        executionPaused: true,
+        pollingPaused: true,
+        message: 'Execution and polling were paused during discovery',
+      },
     });
   } catch (err) {
     logsService.addLog({
@@ -158,6 +167,9 @@ router.post('/mstp/discover', async (req, res, next) => {
       message: `BACnet MS/TP discovery failed — ${err.message}`,
     });
     next(err);
+  } finally {
+    mstpBusCoordinator.releaseBus(mstpBusCoordinator.BUS_OWNER.DISCOVERY);
+    mstpBusCoordinator.resumeAfterDiscovery();
   }
 });
 

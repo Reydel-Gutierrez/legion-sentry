@@ -53,4 +53,24 @@ router.post('/jobs/clear-completed', (_req, res) => {
   res.json({ success: true, ...result });
 });
 
+router.post('/jobs/clear-failed', (_req, res) => {
+  const result = fieldExecutionEngine.clearFailedJobs();
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: `Cleared ${result.removed} failed execution job(s)`,
+  });
+  res.json({ success: true, ...result });
+});
+
+router.post('/jobs/cancel-queued', (_req, res) => {
+  const result = fieldExecutionEngine.cancelQueuedJobs();
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: `Cancelled ${result.cancelled} queued execution job(s)`,
+  });
+  res.json({ success: true, ...result });
+});
+
 module.exports = router;

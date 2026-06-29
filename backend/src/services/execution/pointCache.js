@@ -102,6 +102,12 @@ function applyReadSuccess(pointId, value, options = {}) {
 }
 
 function applyReadFailure(pointId, errorMessage, options = {}) {
+  // eslint-disable-next-line global-require
+  const mstpBusCoordinator = require('./mstpBusCoordinator');
+  if (mstpBusCoordinator.isDiscoveryActive()) {
+    return null;
+  }
+
   const points = pointsStore.loadPoints();
   const index = points.findIndex((p) => p.id === pointId);
   if (index < 0) return null;

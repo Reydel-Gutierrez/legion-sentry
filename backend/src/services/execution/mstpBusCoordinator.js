@@ -38,6 +38,11 @@ function lazyPointPollingEngine() {
   return require('./pointPollingEngine');
 }
 
+function lazyBacnetMstpService() {
+  // eslint-disable-next-line global-require
+  return require('../bacnet/bacnetMstp.service');
+}
+
 function getBusState() {
   if (discoveryActive && !busOwner) return BUS_STATE.PAUSED;
   if (discoveryActive && busOwner === BUS_OWNER.DISCOVERY) return BUS_STATE.DISCOVERY;
@@ -49,7 +54,7 @@ function getBusState() {
 }
 
 function getPauseMessage() {
-  if (discoveryActive) return 'Paused — discovery running';
+  if (discoveryActive) return 'Background polling and device health paused for discovery';
   if (executionPaused && pauseReason) return `Paused — ${pauseReason}`;
   return null;
 }
@@ -60,17 +65,32 @@ async function prepareForDiscovery() {
   pauseReason = 'discovery running';
   busState = BUS_STATE.PAUSED;
 
-  lazyPointPollingEngine().pauseForDiscovery();
-  lazyFieldExecutionEngine().pauseForDiscovery();
-  lazyDeviceHealthPoller().pauseForDiscovery();
+  const polling = lazyPointPollingEngine();
+  const execution = lazyFieldExecutionEngine();
+  const health = lazyDeviceHealthPoller();
 
-  log('info', 'Polling paused because discovery started');
-  log('info', 'Execution paused because discovery is active');
+  polling.pauseForDiscovery();
+  health.pauseForDiscovery();
+  execution.pauseForDiscovery();
 
-  await lazyFieldExecutionEngine().waitForIdleOrCancel(30000);
+  log('info', 'Background services paused for MS/TP discovery');
+
+  const pollingCancelled = execution.cancelQueuedPollingJobs();
+  const healthCancelled = execution.cancelQueuedDeviceHealthJobs();
+  if (pollingCancelled.cancelled > 0 || healthCancelled.cancelled > 0) {
+    log('info', `Queued polling/health jobs cancelled before discovery (${pollingCancelled.cancelled} polling, ${healthCancelled.cancelled} health)`);
+  }
+
+  lazyBacnetMstpService().prepareDiscoverySession();
+
+  await execution.waitForIdleOrCancel(30000);
+
+  log('info', 'Discovery bus lock acquired');
 }
 
 function resumeAfterDiscovery() {
+  log('info', 'Discovery bus lock released');
+
   discoveryActive = false;
   executionPaused = false;
   pauseReason = null;
@@ -84,7 +104,49 @@ function resumeAfterDiscovery() {
   lazyFieldExecutionEngine().resumeFromDiscovery();
   lazyDeviceHealthPoller().resumeFromDiscovery();
 
-  log('info', 'Discovery completed; execution resumed');
+  log('info', 'Background services resumed after discovery');
+}
+
+function pauseBackgroundServices() {
+  lazyPointPollingEngine().pause();
+  lazyDeviceHealthPoller().pause();
+  log('info', 'Background services paused by operator');
+  return getBackgroundStatus();
+}
+
+function resumeBackgroundServices() {
+  if (discoveryActive) {
+    return {
+      success: false,
+      message: 'Cannot resume background services while discovery is active',
+      ...getBackgroundStatus(),
+    };
+  }
+
+  lazyPointPollingEngine().resume();
+  lazyDeviceHealthPoller().resume();
+  log('info', 'Background services resumed by operator');
+  return { success: true, ...getBackgroundStatus() };
+}
+
+function getBackgroundStatus() {
+  const polling = lazyPointPollingEngine().getStatus();
+  const deviceHealth = lazyDeviceHealthPoller().getStatus();
+  const paused = polling.paused || deviceHealth.paused;
+  let pauseReasonLabel = null;
+  if (discoveryActive || polling.pauseReason === 'discovery' || deviceHealth.pauseReason === 'discovery') {
+    pauseReasonLabel = 'discovery';
+  } else if (polling.pauseReason === 'user' || deviceHealth.pauseReason === 'user') {
+    pauseReasonLabel = 'user';
+  }
+
+  return {
+    paused,
+    pauseReason: pauseReasonLabel,
+    discoveryActive,
+    polling,
+    deviceHealth,
+  };
 }
 
 function isDiscoveryActive() {
@@ -117,6 +179,9 @@ function acquireBus(owner) {
   busOwner = owner;
   if (owner === BUS_OWNER.DISCOVERY) {
     busState = BUS_STATE.DISCOVERY;
+    if (!discoveryActive) {
+      log('info', 'Discovery bus lock acquired');
+    }
   } else {
     busState = BUS_STATE.EXECUTION;
   }
@@ -151,6 +216,9 @@ module.exports = {
   BUS_OWNER,
   prepareForDiscovery,
   resumeAfterDiscovery,
+  pauseBackgroundServices,
+  resumeBackgroundServices,
+  getBackgroundStatus,
   isDiscoveryActive,
   isExecutionPaused,
   canStartExecutionJob,

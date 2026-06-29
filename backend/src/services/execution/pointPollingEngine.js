@@ -129,17 +129,24 @@ function tick() {
       pointsStore.savePoints(points);
     }
 
-    fieldExecutionEngine.submitReadProperty({
-      source: 'polling',
-      managedDeviceId: point.managedDeviceId,
-      managedPointId: point.id,
-      objectType: point.objectType,
-      objectInstance: point.objectInstance,
-      propertyIdentifier: BACNET_PROPERTIES.presentValue,
-      maxRetries: 1,
-      timeoutMs: 30000,
-    });
-    submitted += 1;
+    try {
+      fieldExecutionEngine.submitReadProperty({
+        source: 'polling',
+        managedDeviceId: point.managedDeviceId,
+        managedPointId: point.id,
+        objectType: point.objectType,
+        objectInstance: point.objectInstance,
+        propertyIdentifier: BACNET_PROPERTIES.presentValue,
+        maxRetries: 1,
+        timeoutMs: 30000,
+      });
+      submitted += 1;
+    } catch (err) {
+      if (err.code === 'BUS_PAUSED_DISCOVERY') {
+        break;
+      }
+      throw err;
+    }
   }
 
   lastStatus = {
@@ -183,16 +190,18 @@ function getStatus() {
 
   let mode = 'running';
   if (!running) mode = 'disabled';
-  else if (pausedForDiscovery || userPaused) mode = 'paused';
-  else if (mstpBusCoordinator.isDiscoveryActive()) mode = 'paused';
+  else if (pausedForDiscovery || mstpBusCoordinator.isDiscoveryActive()) mode = 'paused_discovery';
+  else if (userPaused) mode = 'paused';
   else if (lastStatus.backpressure || fieldExecutionEngine.countPollingPendingJobs() >= QUEUE_WARN_THRESHOLD) {
     mode = 'backpressure';
   }
 
+  const discoveryPaused = pausedForDiscovery || mstpBusCoordinator.isDiscoveryActive();
+
   return {
     running,
-    paused: pausedForDiscovery || userPaused || mstpBusCoordinator.isDiscoveryActive(),
-    pauseReason: pausedForDiscovery ? 'discovery' : userPaused ? 'user' : null,
+    paused: discoveryPaused || userPaused,
+    pauseReason: discoveryPaused ? 'discovery' : userPaused ? 'user' : null,
     mode,
     schedulerIntervalMs: SCHEDULER_INTERVAL_MS,
     pollablePoints: countPollablePoints(),

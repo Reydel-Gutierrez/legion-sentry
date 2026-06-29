@@ -264,7 +264,7 @@ export default function BacnetMstpPage() {
     setLoading(true);
     setMessage({
       type: 'info',
-      text: 'Pausing field execution and polling so MS/TP discovery can use the bus…',
+      text: 'Background polling and device health paused for discovery…',
     });
     try {
       const result = await api.discoverBacnetMstp(buildDiscoverPayload(mstpForm));
@@ -697,6 +697,14 @@ export default function BacnetMstpPage() {
                 Sentry will join an active MS/TP ring or start an idle ring automatically.
                 Who-Is is sent only while holding the token.
               </p>
+              <p className="text-muted mb-0 mt-2" style={{ fontSize: '0.85rem' }}>
+                Background polling and device health are paused automatically during discovery.
+              </p>
+              {loading && (
+                <p className="text-muted mb-0 mt-2" style={{ fontSize: '0.85rem' }}>
+                  Background polling and device health paused for discovery.
+                </p>
+              )}
               <div className="discovery-intro-actions">
                 {interfaceOpen && (
                   <ActionButton size="sm" onClick={handleCloseMstp} disabled={loading}>

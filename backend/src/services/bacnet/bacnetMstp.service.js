@@ -407,12 +407,32 @@ function getSession() {
   };
 }
 
+function resetTokenEngineTxChain() {
+  tokenEngineTxChain = Promise.resolve();
+}
+
+/**
+ * Clear temporary discovery session state and reset the token transmit chain
+ * before a new MS/TP discovery run. Persistent inventory is untouched.
+ */
+function prepareDiscoverySession() {
+  frameDiagnostics.length = 0;
+  lastSession = null;
+  resetTokenEngineTxChain();
+  addDiscoveryLog('info', 'MS/TP discovery session prepared — frame diagnostics cleared, token chain reset');
+}
+
 function clearSession() {
   const cleared = lastSession?.discoverySessionId || null;
   lastSession = null;
   frameDiagnostics.length = 0;
+  resetTokenEngineTxChain();
   addDiscoveryLog('info', 'Latest MS/TP discovery session results cleared (inventory untouched)');
   return { success: true, clearedSessionId: cleared };
+}
+
+function isMstpBusBusy() {
+  return Boolean(activeDiscovery || activePointDiscovery || activeFieldRead);
 }
 
 function getStatus() {
@@ -1097,6 +1117,12 @@ async function discover(input = {}) {
     const error = new Error('BACnet MS/TP discovery is already in progress');
     error.statusCode = 409;
     error.code = 'DISCOVERY_IN_PROGRESS';
+    throw error;
+  }
+  if (activeFieldRead) {
+    const error = new Error('BACnet MS/TP field operation is still active — cannot start discovery');
+    error.statusCode = 409;
+    error.code = 'FIELD_READ_IN_PROGRESS';
     throw error;
   }
 
@@ -2294,6 +2320,8 @@ module.exports = {
   getFrames,
   getSession,
   clearSession,
+  prepareDiscoverySession,
+  isMstpBusBusy,
   openInterface,
   closeInterface,
   discover,

@@ -157,7 +157,8 @@ router.post('/mstp/discover', async (req, res, next) => {
       coordination: {
         executionPaused: true,
         pollingPaused: true,
-        message: 'Execution and polling were paused during discovery',
+        deviceHealthPaused: true,
+        message: 'Background polling and device health paused for discovery',
       },
     });
   } catch (err) {

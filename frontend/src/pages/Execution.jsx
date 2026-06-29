@@ -44,7 +44,15 @@ const BUS_STATE_LABELS = {
 const POLLING_MODE_LABELS = {
   running: 'Running',
   paused: 'Paused',
+  paused_discovery: 'Paused for discovery',
   backpressure: 'Backpressure',
+  disabled: 'Disabled',
+};
+
+const DEVICE_HEALTH_MODE_LABELS = {
+  running: 'Running',
+  paused: 'Paused',
+  paused_discovery: 'Paused for discovery',
   disabled: 'Disabled',
 };
 
@@ -134,6 +142,7 @@ export default function ExecutionPage() {
   const pollingMode = status?.polling?.mode || 'disabled';
   const queueWarning = status?.queueHealth?.warning;
   const pollingPaused = status?.polling?.paused;
+  const backgroundPaused = status?.backgroundServices?.paused;
   const deviceHealth = status?.deviceHealth || {};
   const pointQuality = status?.pointQualityCounts || status?.polling?.pointQualityCounts || {};
   const activeFieldJob = status?.activeJob && fieldJobs.some((j) => j.id === status.activeJob.id)
@@ -207,7 +216,24 @@ export default function ExecutionPage() {
             <ActionButton size="sm" onClick={load} disabled={loading}>
               Refresh
             </ActionButton>
-            {pollingPaused ? (
+            {backgroundPaused ? (
+              <ActionButton
+                size="sm"
+                onClick={() => runAction(api.resumeBackgroundServices, 'Background services resumed.')}
+                disabled={loading || status?.bus?.discoveryActive}
+              >
+                Resume Background Services
+              </ActionButton>
+            ) : (
+              <ActionButton
+                size="sm"
+                onClick={() => runAction(api.pauseBackgroundServices, 'Background services paused.')}
+                disabled={loading}
+              >
+                Pause All Background Services
+              </ActionButton>
+            )}
+            {pollingPaused && !backgroundPaused ? (
               <ActionButton
                 size="sm"
                 onClick={() => runAction(api.resumePolling, 'Point polling resumed.')}
@@ -215,7 +241,7 @@ export default function ExecutionPage() {
               >
                 Resume Polling
               </ActionButton>
-            ) : (
+            ) : !backgroundPaused ? (
               <ActionButton
                 size="sm"
                 onClick={() => runAction(api.pausePolling, 'Point polling paused.')}
@@ -223,7 +249,7 @@ export default function ExecutionPage() {
               >
                 Pause Polling
               </ActionButton>
-            )}
+            ) : null}
             <ActionButton
               size="sm"
               onClick={() => runAction(api.cancelQueuedPollingJobs, 'Queued polling jobs cancelled.')}
@@ -268,26 +294,26 @@ export default function ExecutionPage() {
         </div>
       )}
 
+      {status?.executionPaused && (
+        <div className="alert-sentry alert-sentry-info mb-3">
+          {status.pauseMessage || 'Background polling and device health paused for discovery.'}
+        </div>
+      )}
+
       <SectionCard title="Current Background Polling" className="mb-3">
         <div className="d-flex flex-wrap gap-3 align-items-center mb-3">
           <StatusChip
-            label={`Bus: ${BUS_STATE_LABELS[busState] || busState}`}
-            tone={busState === 'idle' ? 'success' : 'warn'}
+            label={`Bus State: ${BUS_STATE_LABELS[busState] || busState}`}
+            tone={busState === 'idle' ? 'success' : busState === 'discovery' ? 'warn' : 'warn'}
           />
           <StatusChip
             label={`Polling: ${POLLING_MODE_LABELS[pollingMode] || pollingMode}`}
-            tone={pollingMode === 'running' ? 'success' : pollingMode === 'backpressure' ? 'warn' : 'neutral'}
+            tone={pollingMode === 'running' ? 'success' : pollingMode === 'paused_discovery' ? 'warn' : pollingMode === 'backpressure' ? 'warn' : 'neutral'}
           />
           <StatusChip
-            label={`Device Health: ${deviceHealth.mode || '—'}`}
-            tone={deviceHealth.mode === 'running' ? 'success' : 'neutral'}
+            label={`Device Health: ${DEVICE_HEALTH_MODE_LABELS[deviceHealth.mode] || deviceHealth.mode || '—'}`}
+            tone={deviceHealth.mode === 'running' ? 'success' : deviceHealth.mode === 'paused_discovery' ? 'warn' : 'neutral'}
           />
-          {status?.executionPaused && (
-            <StatusChip
-              label={status.pauseMessage || 'Paused — discovery running'}
-              tone="warn"
-            />
-          )}
         </div>
         <div className="d-flex flex-wrap gap-4 text-muted" style={{ fontSize: '0.85rem' }}>
           <span>Polling queued: {background.polling?.queued ?? 0}</span>

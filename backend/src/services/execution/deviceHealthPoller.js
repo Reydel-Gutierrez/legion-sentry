@@ -59,6 +59,10 @@ function recordHeartbeatSuccess(managedDeviceId) {
 }
 
 function recordHeartbeatFailure(managedDeviceId, errorMessage) {
+  if (mstpBusCoordinator.isDiscoveryActive()) {
+    return { skipped: true, reason: 'paused_discovery' };
+  }
+
   const result = managedDevices.recordHeartbeatResult(managedDeviceId, {
     success: false,
     error: errorMessage,
@@ -96,18 +100,24 @@ function tick() {
 
     if (fieldExecutionEngine.isQueueFull()) break;
 
-    fieldExecutionEngine.submitReadProperty({
-      source: 'device-health',
-      managedDeviceId: device.id,
-      objectType: DEVICE_OBJECT_TYPE,
-      objectInstance: device.deviceInstance,
-      propertyIdentifier: HEARTBEAT_PROPERTY_PRIMARY,
-      fallbackPropertyIdentifier: HEARTBEAT_PROPERTY_FALLBACK,
-      maxRetries: 1,
-      timeoutMs: 30000,
-    });
-    submitted += 1;
-    scheduleNextHeartbeat(device.id);
+    try {
+      fieldExecutionEngine.submitReadProperty({
+        source: 'device-health',
+        managedDeviceId: device.id,
+        objectType: DEVICE_OBJECT_TYPE,
+        objectInstance: device.deviceInstance,
+        propertyIdentifier: HEARTBEAT_PROPERTY_PRIMARY,
+        fallbackPropertyIdentifier: HEARTBEAT_PROPERTY_FALLBACK,
+        maxRetries: 1,
+        timeoutMs: 30000,
+      });
+      submitted += 1;
+      scheduleNextHeartbeat(device.id);
+    } catch (err) {
+      if (err.code !== 'BUS_PAUSED_DISCOVERY') {
+        throw err;
+      }
+    }
   }
 
   lastStatus = {
@@ -158,13 +168,16 @@ function getStatus() {
     else qualityCounts.unknown += 1;
   }
 
+  const discoveryPaused = pausedForDiscovery || mstpBusCoordinator.isDiscoveryActive();
   let mode = 'running';
   if (!running) mode = 'disabled';
-  else if (pausedForDiscovery || userPaused) mode = 'paused';
+  else if (discoveryPaused) mode = 'paused_discovery';
+  else if (userPaused) mode = 'paused';
 
   return {
     running,
-    paused: pausedForDiscovery || userPaused,
+    paused: discoveryPaused || userPaused,
+    pauseReason: discoveryPaused ? 'discovery' : userPaused ? 'user' : null,
     mode,
     heartbeatIntervalMs: DEFAULT_HEARTBEAT_INTERVAL_MS,
     enabledDevices: devices.length,

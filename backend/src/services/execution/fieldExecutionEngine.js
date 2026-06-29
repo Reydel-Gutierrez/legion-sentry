@@ -329,6 +329,13 @@ function createJob(payload = {}) {
     throw error;
   }
 
+  if (BACKGROUND_SOURCES.has(source) && isExecutionPaused()) {
+    const error = new Error('Background job deferred — MS/TP bus paused for discovery');
+    error.statusCode = 409;
+    error.code = 'BUS_PAUSED_DISCOVERY';
+    throw error;
+  }
+
   const now = new Date().toISOString();
   const job = {
     id: jobsStore.generateJobId(),
@@ -443,6 +450,18 @@ function cancelQueuedPollingJobs() {
   return { cancelled };
 }
 
+function cancelQueuedDeviceHealthJobs() {
+  const jobs = jobsStore.loadJobs();
+  let cancelled = 0;
+  for (const job of jobs) {
+    if (job.source === 'device-health' && job.status === JOB_STATUS.QUEUED) {
+      cancelJob(job.id);
+      cancelled += 1;
+    }
+  }
+  return { cancelled };
+}
+
 function getExecutionStatus() {
   const jobs = jobsStore.loadJobs();
   const counts = summarizeJobs(jobs);
@@ -454,6 +473,7 @@ function getExecutionStatus() {
   const coordinator = mstpBusCoordinator.getCoordinatorStatus();
   const polling = lazyPointPollingEngine().getStatus();
   const deviceHealth = lazyDeviceHealthPoller().getStatus();
+  const backgroundServices = mstpBusCoordinator.getBackgroundStatus();
   const paused = isExecutionPaused();
   const queueOverLimit = counts.queued >= QUEUE_WARN_THRESHOLD
     || pollingQueued >= QUEUE_WARN_THRESHOLD;
@@ -474,10 +494,13 @@ function getExecutionStatus() {
     nextQueuedJobId: queuedNext?.id || null,
     workerIntervalMs: WORKER_INTERVAL_MS,
     executionPaused: paused,
-    pauseMessage: paused ? (coordinator.pauseMessage || 'Paused — discovery running') : null,
+    pauseMessage: paused
+      ? (coordinator.pauseMessage || 'Background polling and device health paused for discovery')
+      : null,
     bus: coordinator,
     polling,
     deviceHealth,
+    backgroundServices,
     pointQualityCounts: polling.pointQualityCounts || {},
     queueHealth: {
       queued: counts.queued,
@@ -527,6 +550,10 @@ function applyReadResult(job, result) {
 }
 
 function applyReadFailure(job, errorMessage) {
+  if (mstpBusCoordinator.isDiscoveryActive()) {
+    return;
+  }
+
   if (job.source === 'device-health' && job.managedDeviceId) {
     lazyDeviceHealthPoller().recordHeartbeatFailure(job.managedDeviceId, errorMessage);
     return;
@@ -734,6 +761,10 @@ async function workerTick() {
   const next = sortQueuedJobs(jobsStore.loadJobs())[0];
   if (!next) return;
 
+  if (mstpBusCoordinator.isDiscoveryActive() && BACKGROUND_SOURCES.has(next.source)) {
+    return;
+  }
+
   workerRunning = true;
   activeJobId = next.id;
 
@@ -883,6 +914,7 @@ module.exports = {
   cancelJob,
   cancelQueuedJobs,
   cancelQueuedPollingJobs,
+  cancelQueuedDeviceHealthJobs,
   clearCompletedJobs,
   clearFailedJobs,
   getExecutionStatus,

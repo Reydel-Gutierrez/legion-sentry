@@ -1,6 +1,7 @@
 const express = require('express');
 const fieldExecutionEngine = require('../services/execution/fieldExecutionEngine');
 const pointPollingEngine = require('../services/execution/pointPollingEngine');
+const mstpBusCoordinator = require('../services/execution/mstpBusCoordinator');
 const logsService = require('../services/logs');
 
 const router = express.Router();
@@ -94,6 +95,20 @@ router.post('/polling/resume', (_req, res) => {
   pointPollingEngine.resume();
   logsService.addLog({ level: 'info', service: 'bacnet', message: 'Point polling resumed by user' });
   res.json({ success: true, polling: pointPollingEngine.getStatus() });
+});
+
+router.get('/background/status', (_req, res) => {
+  res.json(mstpBusCoordinator.getBackgroundStatus());
+});
+
+router.post('/background/pause', (_req, res) => {
+  const status = mstpBusCoordinator.pauseBackgroundServices();
+  res.json({ success: true, ...status });
+});
+
+router.post('/background/resume', (_req, res) => {
+  const result = mstpBusCoordinator.resumeBackgroundServices();
+  res.json(result);
 });
 
 module.exports = router;

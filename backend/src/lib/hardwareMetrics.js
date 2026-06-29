@@ -48,7 +48,6 @@ function isRealHardware() {
 }
 
 function getRuntimeMode() {
-  if (process.env.MOCK_DATA === 'true') return 'DEVELOPMENT';
   return isRealHardware() ? 'REAL HARDWARE' : 'DEVELOPMENT';
 }
 

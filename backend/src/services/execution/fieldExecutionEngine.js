@@ -116,10 +116,6 @@ function saveJobsTrimmed(jobs) {
   jobsStore.saveJobs(trimJobs(jobs));
 }
 
-function useMockData() {
-  return process.env.MOCK_DATA === 'true';
-}
-
 function createCancellationError() {
   const error = new Error('Job cancelled');
   error.code = 'JOB_CANCELLED';
@@ -235,6 +231,61 @@ function summarizeJobs(jobs) {
   }
 
   return counts;
+}
+
+const BACKGROUND_SOURCES = new Set(['polling', 'device-health']);
+
+function isFieldOperationJob(job) {
+  if (BACKGROUND_SOURCES.has(job.source)) return false;
+  if (job.type === JOB_TYPES.DISCOVER_POINTS) return true;
+  if (job.type === JOB_TYPES.WRITE_PROPERTY) return true;
+  if (job.type === JOB_TYPES.READ_PROPERTY && job.source === 'ui') return true;
+  return false;
+}
+
+function summarizeBackgroundActivity(jobs) {
+  const pollingJobs = jobs.filter((job) => job.source === 'polling');
+  const healthJobs = jobs.filter((job) => job.source === 'device-health');
+  const activePolling = pollingJobs.filter((job) => isActiveStatus(job.status));
+  const queuedPolling = pollingJobs.filter((job) => job.status === JOB_STATUS.QUEUED);
+  const activeHealth = healthJobs.filter((job) => isActiveStatus(job.status));
+  const queuedHealth = healthJobs.filter((job) => job.status === JOB_STATUS.QUEUED);
+
+  return {
+    polling: {
+      queued: queuedPolling.length,
+      active: activePolling.length,
+      activeJob: activePolling[0] ? enrichJobForApi(activePolling[0]) : null,
+    },
+    deviceHealth: {
+      queued: queuedHealth.length,
+      active: activeHealth.length,
+      activeJob: activeHealth[0] ? enrichJobForApi(activeHealth[0]) : null,
+    },
+    totalQueued: queuedPolling.length + queuedHealth.length,
+    totalActive: activePolling.length + activeHealth.length,
+  };
+}
+
+function summarizeFieldOperations(jobs) {
+  const fieldJobs = jobs.filter(isFieldOperationJob);
+  const counts = summarizeJobs(fieldJobs);
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  const recent = fieldJobs
+    .filter((job) => {
+      if (!isTerminalStatus(job.status)) return true;
+      if (job.status === JOB_STATUS.FAILED) return true;
+      if (job.status === JOB_STATUS.COMPLETED) {
+        const stamp = job.completedAt || job.createdAt;
+        return stamp && new Date(stamp).getTime() >= oneHourAgo;
+      }
+      return false;
+    })
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    .slice(0, 50)
+    .map(enrichJobForApi);
+
+  return { counts, recent };
 }
 
 function enrichJobForApi(job) {
@@ -395,6 +446,8 @@ function cancelQueuedPollingJobs() {
 function getExecutionStatus() {
   const jobs = jobsStore.loadJobs();
   const counts = summarizeJobs(jobs);
+  const fieldOps = summarizeFieldOperations(jobs);
+  const background = summarizeBackgroundActivity(jobs);
   const activeJob = activeJobId ? getJobById(activeJobId) : null;
   const queuedNext = sortQueuedJobs(jobs)[0] || null;
   const pollingQueued = countPollingPendingJobs();
@@ -414,6 +467,9 @@ function getExecutionStatus() {
     completedJobs: counts.completed,
     failedJobs: counts.failed,
     cancelledJobs: counts.cancelled,
+    fieldOperations: fieldOps.counts,
+    fieldOperationJobs: fieldOps.recent,
+    backgroundActivity: background,
     pollingQueuedJobs: pollingQueued,
     nextQueuedJobId: queuedNext?.id || null,
     workerIntervalMs: WORKER_INTERVAL_MS,
@@ -513,15 +569,6 @@ async function executeReadProperty(job) {
   });
 
   if (shouldCancelJob(job.id)) throw createCancellationError();
-
-  if (useMockData()) {
-    const now = new Date().toISOString();
-    return {
-      value: propertyIdentifier === BACNET_PROPERTIES.presentValue ? 72.4 : 'mock',
-      raw: null,
-      lastReadAt: now,
-    };
-  }
 
   updateJob(job.id, {
     status: JOB_STATUS.WAITING_TOKEN,

@@ -31,7 +31,7 @@ function getDeviceMap() {
 function isDevicePollable(device) {
   if (!device?.enabled) return false;
   const quality = device.deviceQuality;
-  if (quality === 'offline') return false;
+  if (quality === 'offline' || quality === 'stale') return false;
   return true;
 }
 

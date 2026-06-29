@@ -21,7 +21,7 @@ const STATUS_MAP = {
   disabled: 'stopped',
   not_present: 'stopped',
   'real hardware': 'hardware',
-  development: 'simulated',
+  development: 'development',
 };
 
 export default function StatusBadge({ status, label, variant }) {

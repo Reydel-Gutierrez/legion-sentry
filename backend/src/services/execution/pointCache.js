@@ -7,7 +7,7 @@ const {
 } = require('./pollConfig');
 
 const DEVICE_QUALITY_OFFLINE = new Set(['offline']);
-const DEVICE_QUALITY_STALE = new Set(['stale', 'offline']);
+const DEVICE_QUALITY_STALE = new Set(['stale']);
 
 const POINT_QUALITY = Object.freeze({
   ONLINE: 'online',

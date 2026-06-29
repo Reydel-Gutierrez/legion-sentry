@@ -40,7 +40,7 @@ function testReadRegister() {
 function scanDevices() {
   return {
     success: true,
-    message: 'Modbus scan placeholder — no devices discovered in simulated mode.',
+    message: 'Modbus scan is not implemented.',
     devices: [],
   };
 }

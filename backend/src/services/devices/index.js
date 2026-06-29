@@ -1,10 +1,8 @@
-const mockData = require('./mockData');
 const inventory = require('./inventory');
 const managedDevices = require('./managedDevices');
 const bacnetIpService = require('../bacnet/bacnetIp.service');
 const { DEVICE_HEALTH } = require('../../lib/deviceStates');
 
-const USE_MOCK_DATA = process.env.MOCK_DATA === 'true';
 const BACNET_IP_DISCOVERY_IMPLEMENTED = true;
 const BACNET_MSTP_DISCOVERY_IMPLEMENTED = true;
 
@@ -47,26 +45,11 @@ function computeMstpStatus(device) {
 }
 
 function loadDevices() {
-  if (USE_MOCK_DATA) {
-    return mockData.MOCK_DEVICES.map((d) => ({
-      ...d,
-      protocol: d.protocol || 'bacnet-ip',
-      transport: d.protocol === 'bacnet-mstp' ? 'mstp' : 'ip',
-      vendorName: d.vendorName || d.vendor,
-      modelName: d.modelName || d.model,
-      macAddress: d.macAddress || null,
-      lastSeenAt: d.lastSeenAt || d.lastSeen,
-      lastResponseMs: d.lastResponseMs ?? null,
-      source: 'mock',
-    }));
-  }
   return inventory.loadInventory();
 }
 
 function persistDevices(devices) {
-  if (!USE_MOCK_DATA) {
-    inventory.saveInventory(devices);
-  }
+  inventory.saveInventory(devices);
 }
 
 function buildSummary(devices) {
@@ -127,11 +110,10 @@ function getDevices() {
     scanned: hasScanned || devices.length > 0,
     discoveryImplemented: {
       bacnetIp: BACNET_IP_DISCOVERY_IMPLEMENTED,
-      bacnetMstp: BACNET_MSTP_DISCOVERY_IMPLEMENTED || USE_MOCK_DATA,
+      bacnetMstp: BACNET_MSTP_DISCOVERY_IMPLEMENTED,
     },
     latestDiscoverySessionId: latestMstpDiscoverySessionId,
     lastRefresh,
-    mockData: USE_MOCK_DATA,
   };
 }
 
@@ -144,19 +126,6 @@ function getDeviceById(id) {
 function getDeviceHealth(id) {
   const device = loadDevices().find((d) => d.id === id);
   if (!device) return null;
-
-  if (USE_MOCK_DATA) {
-    const health = mockData.HEALTH_DATA[device.status] || mockData.HEALTH_DATA.offline;
-    return {
-      deviceId: id,
-      status: device.status,
-      online: device.status === DEVICE_HEALTH.ONLINE,
-      responseTimeMs: health.responseTimeMs,
-      communicationErrors: health.communicationErrors,
-      lastSeen: device.lastSeenAt || device.lastSeen,
-      checkedAt: new Date().toISOString(),
-    };
-  }
 
   if (isMstpTransport(device)) {
     // MS/TP devices are never assumed online from inventory alone. Online is
@@ -192,11 +161,9 @@ function getDeviceObjects(id) {
   const device = loadDevices().find((d) => d.id === id);
   if (!device) return null;
 
-  const summary = USE_MOCK_DATA
-    ? (mockData.OBJECT_SUMMARIES[id] || {
-      ai: 0, ao: 0, av: 0, bi: 0, bo: 0, bv: 0, schedules: 0, trendLogs: 0, files: 0,
-    })
-    : { ai: 0, ao: 0, av: 0, bi: 0, bo: 0, bv: 0, schedules: 0, trendLogs: 0, files: 0 };
+  const summary = {
+    ai: 0, ao: 0, av: 0, bi: 0, bo: 0, bv: 0, schedules: 0, trendLogs: 0, files: 0,
+  };
 
   return {
     deviceId: id,
@@ -302,26 +269,6 @@ function mergeDiscoveredDevices(discoveredList, mapper = mapDiscoveredToInventor
 
 function discoverDevices(protocol = 'all') {
   if (protocol === 'bacnet-mstp') {
-    if (USE_MOCK_DATA) {
-      const durationMs = 6200;
-      const filtered = mockData.MOCK_DEVICES.filter((d) => d.protocol === 'bacnet-mstp');
-      const devices = filtered.map((d) => mapMstpDiscoveredToInventory({
-        ...d,
-        macAddress: d.macAddress,
-        status: d.status === 'offline' ? DEVICE_HEALTH.OFFLINE : DEVICE_HEALTH.ONLINE,
-      }, 'mock'));
-      persistDevices(devices);
-      hasScanned = true;
-      return {
-        success: true,
-        protocol,
-        scannedAt: new Date().toISOString(),
-        durationMs,
-        devicesFound: devices.length,
-        devices: devices.map(normalizeDeviceForApi),
-      };
-    }
-
     const error = new Error('Use POST /api/bacnet/mstp/discover for BACnet MS/TP discovery');
     error.statusCode = 400;
     error.code = 'USE_BACNET_MSTP_ENDPOINT';
@@ -329,24 +276,6 @@ function discoverDevices(protocol = 'all') {
   }
 
   if (protocol === 'bacnet-ip' || protocol === 'all') {
-    if (USE_MOCK_DATA && protocol === 'all') {
-      const durationMs = 4200;
-      const devices = mockData.MOCK_DEVICES.map((d) => mapDiscoveredToInventory({
-        ...d,
-        status: d.status === 'offline' ? DEVICE_HEALTH.OFFLINE : DEVICE_HEALTH.ONLINE,
-      }, 'mock'));
-      persistDevices(devices);
-      hasScanned = true;
-      return {
-        success: true,
-        protocol,
-        scannedAt: new Date().toISOString(),
-        durationMs,
-        devicesFound: devices.length,
-        devices: devices.map(normalizeDeviceForApi),
-      };
-    }
-
     const error = new Error('Use POST /api/bacnet/ip/discover for BACnet/IP discovery');
     error.statusCode = 400;
     error.code = 'USE_BACNET_IP_ENDPOINT';
@@ -480,14 +409,6 @@ async function refreshDevices() {
   const refreshed = [];
 
   for (const device of devices) {
-    if (USE_MOCK_DATA) {
-      refreshed.push({
-        ...device,
-        lastSeenAt: device.status === DEVICE_HEALTH.OFFLINE ? device.lastSeenAt : new Date().toISOString(),
-      });
-      continue;
-    }
-
     if ((device.protocol === 'bacnet-ip' || device.protocol === 'BACnet') && device.address) {
       try {
         const health = await bacnetIpService.readObjectName({
@@ -577,7 +498,6 @@ function getDashboardSummary() {
 }
 
 function isDiscoveryImplemented(protocol = 'bacnet-ip') {
-  if (USE_MOCK_DATA) return true;
   if (protocol === 'bacnet-mstp') return BACNET_MSTP_DISCOVERY_IMPLEMENTED;
   return BACNET_IP_DISCOVERY_IMPLEMENTED;
 }

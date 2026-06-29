@@ -6,9 +6,6 @@ const pointCache = require('../execution/pointCache');
 const { createPollDefaults, isValidPollGroup, getPollIntervalMs } = require('../execution/pollConfig');
 const { sanitizeText, BACNET_PROPERTIES } = require('../bacnet/bacnetApduCodec');
 
-function useMockData() {
-  return process.env.MOCK_DATA === 'true';
-}
 const MSTP_TRANSPORT = 'BACnet MS/TP';
 
 function pointKey(managedDeviceId, objectType, objectInstance) {
@@ -163,44 +160,6 @@ function mergeDiscoveredPoints(managedDeviceId, discoveredPoints) {
   return mergedForDevice.map(normalizePointForApi);
 }
 
-function buildMockPoints(managedDeviceId) {
-  const now = new Date().toISOString();
-  return [
-    {
-      objectType: 0,
-      objectTypeLabel: 'analog-input',
-      objectInstance: 1,
-      objectName: 'Space Temp',
-      description: 'Zone temperature',
-      presentValue: 72.4,
-      units: 64,
-      reliability: 0,
-      statusFlags: '0000',
-      outOfService: false,
-      discoveredAt: now,
-      lastReadAt: now,
-    },
-    {
-      objectType: 3,
-      objectTypeLabel: 'binary-input',
-      objectInstance: 1,
-      objectName: 'Occupancy',
-      description: 'Occupancy input',
-      presentValue: 1,
-      units: null,
-      reliability: 0,
-      statusFlags: '0000',
-      outOfService: false,
-      discoveredAt: now,
-      lastReadAt: now,
-    },
-  ].map((point) => ({
-    ...point,
-    id: pointsStore.generatePointId(managedDeviceId, point.objectType, point.objectInstance),
-    managedDeviceId,
-  }));
-}
-
 async function runPointDiscovery(managedDeviceId, hooks = {}) {
   const { onProgress, shouldCancel } = hooks;
   const report = (progress, message) => {
@@ -216,26 +175,6 @@ async function runPointDiscovery(managedDeviceId, hooks = {}) {
 
   const device = validateManagedDeviceForPointDiscovery(getManagedDeviceRecord(managedDeviceId));
   report(0, 'Queued');
-
-  if (useMockData()) {
-    cancelled();
-    report(10, 'Reading objectList');
-    report(25, 'objectList read');
-    report(95, 'Reading point properties');
-    const points = mergeDiscoveredPoints(managedDeviceId, buildMockPoints(managedDeviceId));
-    report(100, 'Discovery complete');
-    return {
-      success: true,
-      managedDeviceId,
-      deviceInstance: device.deviceInstance,
-      mstpMacAddress: device.mstpMacAddress,
-      pointsFound: points.length,
-      points,
-      failures: [],
-      durationMs: 120,
-      message: `Mock point discovery found ${points.length} point(s).`,
-    };
-  }
 
   try {
     cancelled();

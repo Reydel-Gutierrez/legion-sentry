@@ -59,7 +59,6 @@ Do not rely on local-only localhost binding — the dev server binds to all inte
 **Notes:**
 - Default RS485 port on Pi: `/dev/serial0`
 - Serial console must be disabled for RS485 HAT use
-- Set `MOCK_DATA=true` only for simulated development on non-Pi hosts
 - On first boot, default login is created automatically (see Authentication)
 
 ## Authentication
@@ -194,4 +193,4 @@ On Windows or other dev hosts, network apply endpoints return **501 Unsupported*
 
 ## Development Mode
 
-On Windows or without Pi hardware, runtime reports **DEVELOPMENT**. Serial monitor and some network operations return unsupported safely. Set `MOCK_DATA=true` to enable mock device data for UI testing only.
+On Windows or without Pi hardware, runtime reports **DEVELOPMENT**. Serial monitor and some network operations return unsupported safely. BACnet MS/TP operations require a live RS485 bus and connected controllers.

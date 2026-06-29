@@ -6,9 +6,9 @@ const POLL_GROUPS = Object.freeze({
 });
 
 const POLL_INTERVAL_MS = Object.freeze({
-  fast: 5000,
-  normal: 30000,
-  slow: 60000,
+  fast: 10000,
+  normal: 60000,
+  slow: 300000,
   manual: null,
 });
 
@@ -25,18 +25,17 @@ const DEFAULT_POLL_GROUP_BY_OBJECT_TYPE = Object.freeze({
   4: POLL_GROUPS.fast, // binary-output
   5: POLL_GROUPS.normal, // binary-value
   6: POLL_GROUPS.manual, // calendar
-  8: POLL_GROUPS.manual, // device
-  9: POLL_GROUPS.slow,
+  8: POLL_GROUPS.slow, // device
   10: POLL_GROUPS.manual, // file
   13: POLL_GROUPS.normal, // multi-state-input
   14: POLL_GROUPS.normal, // multi-state-output
+  15: POLL_GROUPS.manual, // notification-class
   17: POLL_GROUPS.manual, // schedule
   19: POLL_GROUPS.normal, // multi-state-value
-  20: POLL_GROUPS.slow, // trend-log
-  28: POLL_GROUPS.slow, // load-control
+  20: POLL_GROUPS.manual, // trend-log
 });
 
-const STATIC_OBJECT_TYPES = new Set([6, 8, 10, 11, 15, 17, 20, 25, 27]);
+const STATIC_OBJECT_TYPES = new Set([6, 10, 11, 15, 17, 20, 25, 27]);
 
 function isValidPollGroup(group) {
   return Object.values(POLL_GROUPS).includes(group);

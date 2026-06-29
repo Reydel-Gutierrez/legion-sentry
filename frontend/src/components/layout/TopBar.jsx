@@ -6,7 +6,7 @@ function runtimeBadgeProps(runtimeMode) {
   if (runtimeMode === 'REAL HARDWARE') {
     return { status: 'real hardware', label: 'REAL HARDWARE', variant: 'hardware' };
   }
-  return { status: 'development', label: 'DEVELOPMENT', variant: 'simulated' };
+  return { status: 'development', label: 'DEVELOPMENT', variant: 'development' };
 }
 
 export default function TopBar({ topBar }) {

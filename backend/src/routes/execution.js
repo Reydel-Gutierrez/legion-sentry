@@ -1,5 +1,6 @@
 const express = require('express');
 const fieldExecutionEngine = require('../services/execution/fieldExecutionEngine');
+const pointPollingEngine = require('../services/execution/pointPollingEngine');
 const logsService = require('../services/logs');
 
 const router = express.Router();
@@ -71,6 +72,28 @@ router.post('/jobs/cancel-queued', (_req, res) => {
     message: `Cancelled ${result.cancelled} queued execution job(s)`,
   });
   res.json({ success: true, ...result });
+});
+
+router.post('/jobs/cancel-queued-polling', (_req, res) => {
+  const result = fieldExecutionEngine.cancelQueuedPollingJobs();
+  logsService.addLog({
+    level: 'info',
+    service: 'bacnet',
+    message: `Cancelled ${result.cancelled} queued polling job(s)`,
+  });
+  res.json({ success: true, ...result });
+});
+
+router.post('/polling/pause', (_req, res) => {
+  pointPollingEngine.pause();
+  logsService.addLog({ level: 'info', service: 'bacnet', message: 'Point polling paused by user' });
+  res.json({ success: true, polling: pointPollingEngine.getStatus() });
+});
+
+router.post('/polling/resume', (_req, res) => {
+  pointPollingEngine.resume();
+  logsService.addLog({ level: 'info', service: 'bacnet', message: 'Point polling resumed by user' });
+  res.json({ success: true, polling: pointPollingEngine.getStatus() });
 });
 
 module.exports = router;

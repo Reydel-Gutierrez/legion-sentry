@@ -14,6 +14,7 @@ const BACNET_PROPERTIES = {
   statusFlags: 111,
   reliability: 103,
   outOfService: 81,
+  systemStatus: 112,
 };
 
 const POINT_DISCOVERY_PROPERTIES = [

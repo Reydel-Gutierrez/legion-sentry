@@ -56,6 +56,14 @@ export const api = {
     body: JSON.stringify(body || {}),
   }),
   clearManagedDevicePoints: (id) => request(`/devices/managed/${id}/points`, { method: 'DELETE' }),
+  updateManagedPoint: (deviceId, pointId, data) => request(`/devices/managed/${deviceId}/points/${pointId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  }),
+  refreshManagedPoint: (deviceId, pointId, body) => request(`/devices/managed/${deviceId}/points/${pointId}/refresh`, {
+    method: 'POST',
+    body: JSON.stringify(body || {}),
+  }),
   getExecutionStatus: () => request('/execution/status'),
   getExecutionJobs: (params = {}) => {
     const query = new URLSearchParams(params).toString();
@@ -67,6 +75,9 @@ export const api = {
   clearCompletedExecutionJobs: () => request('/execution/jobs/clear-completed', { method: 'POST' }),
   clearFailedExecutionJobs: () => request('/execution/jobs/clear-failed', { method: 'POST' }),
   cancelQueuedExecutionJobs: () => request('/execution/jobs/cancel-queued', { method: 'POST' }),
+  cancelQueuedPollingJobs: () => request('/execution/jobs/cancel-queued-polling', { method: 'POST' }),
+  pausePolling: () => request('/execution/polling/pause', { method: 'POST' }),
+  resumePolling: () => request('/execution/polling/resume', { method: 'POST' }),
   getDevice: (id) => request(`/devices/${id}`),
   getDeviceHealth: (id) => request(`/devices/${id}/health`),
   getDeviceObjects: (id) => request(`/devices/${id}/objects`),

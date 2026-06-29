@@ -42,9 +42,28 @@ const POLLING_MODE_LABELS = {
   disabled: 'Disabled',
 };
 
+const QUALITY_TONE = {
+  online: 'success',
+  degraded: 'warn',
+  stale: 'warn',
+  offline: 'danger',
+  unknown: 'neutral',
+};
+
 function statusChip(status) {
   const label = (status || 'unknown').replace(/_/g, ' ');
   return <StatusChip label={label} tone={STATUS_TONE[status] || 'neutral'} />;
+}
+
+function qualityChip(label, count) {
+  if (!count) return null;
+  return (
+    <StatusChip
+      key={label}
+      label={`${label}: ${count}`}
+      tone={QUALITY_TONE[label] || 'neutral'}
+    />
+  );
 }
 
 export default function ExecutionPage() {
@@ -58,7 +77,13 @@ export default function ExecutionPage() {
     Promise.all([api.getExecutionStatus(), api.getExecutionJobs()])
       .then(([statusData, jobsData]) => {
         setStatus(statusData);
-        setJobs(jobsData.jobs || []);
+        const allJobs = jobsData.jobs || [];
+        const visible = allJobs.filter((job) => {
+          if (!['completed', 'failed'].includes(job.status)) return true;
+          if (job.source === 'polling') return false;
+          return true;
+        });
+        setJobs(visible.length > 0 ? visible : allJobs.slice(0, 50));
       })
       .catch((err) => setMessage({ type: 'error', text: err.message }))
       .finally(() => setLoading(false));
@@ -99,6 +124,9 @@ export default function ExecutionPage() {
   const busState = status?.bus?.busState || 'idle';
   const pollingMode = status?.polling?.mode || 'disabled';
   const queueWarning = status?.queueHealth?.warning;
+  const pollingPaused = status?.polling?.paused;
+  const deviceHealth = status?.deviceHealth || {};
+  const pointQuality = status?.pointQualityCounts || status?.polling?.pointQualityCounts || {};
 
   const columns = [
     {
@@ -139,16 +167,6 @@ export default function ExecutionPage() {
       render: (job) => formatTimestamp(job.createdAt),
     },
     {
-      key: 'startedAt',
-      header: 'Started',
-      render: (job) => formatTimestamp(job.startedAt),
-    },
-    {
-      key: 'completedAt',
-      header: 'Completed',
-      render: (job) => formatTimestamp(job.completedAt),
-    },
-    {
       key: 'actions',
       header: '',
       align: 'right',
@@ -172,6 +190,30 @@ export default function ExecutionPage() {
           <>
             <ActionButton size="sm" onClick={load} disabled={loading}>
               Refresh
+            </ActionButton>
+            {pollingPaused ? (
+              <ActionButton
+                size="sm"
+                onClick={() => runAction(api.resumePolling, 'Point polling resumed.')}
+                disabled={loading}
+              >
+                Resume Polling
+              </ActionButton>
+            ) : (
+              <ActionButton
+                size="sm"
+                onClick={() => runAction(api.pausePolling, 'Point polling paused.')}
+                disabled={loading}
+              >
+                Pause Polling
+              </ActionButton>
+            )}
+            <ActionButton
+              size="sm"
+              onClick={() => runAction(api.cancelQueuedPollingJobs, 'Queued polling jobs cancelled.')}
+              disabled={loading}
+            >
+              Cancel Polling Queue
             </ActionButton>
             <ActionButton
               size="sm"
@@ -214,11 +256,15 @@ export default function ExecutionPage() {
         <div className="d-flex flex-wrap gap-3 align-items-center mb-3">
           <StatusChip
             label={`Bus: ${BUS_STATE_LABELS[busState] || busState}`}
-            tone={busState === 'idle' ? 'success' : busState === 'paused' ? 'warn' : 'warn'}
+            tone={busState === 'idle' ? 'success' : 'warn'}
           />
           <StatusChip
             label={`Polling: ${POLLING_MODE_LABELS[pollingMode] || pollingMode}`}
             tone={pollingMode === 'running' ? 'success' : pollingMode === 'backpressure' ? 'warn' : 'neutral'}
+          />
+          <StatusChip
+            label={`Device Health: ${deviceHealth.mode || '—'}`}
+            tone={deviceHealth.mode === 'running' ? 'success' : 'neutral'}
           />
           {status?.executionPaused && (
             <StatusChip
@@ -228,39 +274,23 @@ export default function ExecutionPage() {
           )}
         </div>
         <div className="d-flex flex-wrap gap-4 text-muted" style={{ fontSize: '0.85rem' }}>
-          <span>
-            Queued:
-            {' '}
-            {status?.queuedJobs ?? 0}
-          </span>
-          <span>
-            Polling queued:
-            {' '}
-            {status?.pollingQueuedJobs ?? 0}
-          </span>
-          <span>
-            Failed:
-            {' '}
-            {status?.failedJobs ?? 0}
-          </span>
-          <span>
-            Pollable points:
-            {' '}
-            {status?.polling?.pollablePoints ?? 0}
-          </span>
-          <span>
-            Backoff points:
-            {' '}
-            {status?.polling?.backoffPoints ?? 0}
-          </span>
+          <span>Queue depth: {status?.queuedJobs ?? 0}</span>
+          <span>Polling queued: {status?.pollingQueuedJobs ?? 0}</span>
+          <span>Due points: {status?.polling?.duePoints ?? 0}</span>
+          <span>Pollable points: {status?.polling?.pollablePoints ?? 0}</span>
+          <span>Failed: {status?.failedJobs ?? 0}</span>
         </div>
-        {status?.polling?.staleDevices?.length > 0 && (
+        <div className="d-flex flex-wrap gap-2 mt-3">
+          {Object.entries(deviceHealth.deviceQualityCounts || {}).map(([label, count]) => (
+            qualityChip(label, count)
+          ))}
+          {Object.entries(pointQuality).map(([label, count]) => (
+            qualityChip(label.replace(/_/g, ' '), count)
+          ))}
+        </div>
+        {status?.polling?.lastTick?.backpressure && (
           <p className="text-muted mt-3 mb-0" style={{ fontSize: '0.8rem' }}>
-            Polling paused for
-            {' '}
-            {status.polling.staleDevices.length}
-            {' '}
-            stale device(s) — not recently seen on the trunk.
+            Backpressure active — polling skipped because queue is at limit.
           </p>
         )}
       </SectionCard>
@@ -278,7 +308,7 @@ export default function ExecutionPage() {
               {TYPE_LABELS[status.activeJob.type] || status.activeJob.type}
               {' '}
               (
-              {status.activeJob.id}
+              {status.activeJob.source}
               )
             </span>
           )}
@@ -295,6 +325,9 @@ export default function ExecutionPage() {
       </SectionCard>
 
       <SectionCard title={`Execution Jobs${loading ? ' — refreshing…' : ''}`}>
+        <p className="text-muted mb-3" style={{ fontSize: '0.8rem' }}>
+          Completed polling jobs are summarized and not shown here to keep the queue readable.
+        </p>
         <DataTable
           columns={columns}
           rows={jobs}

@@ -120,6 +120,33 @@ router.delete('/managed/:id/points', (req, res) => {
   res.json(result);
 });
 
+router.patch('/managed/:deviceId/points/:pointId', (req, res, next) => {
+  try {
+    const result = managedPoints.updatePointPollingConfig(
+      req.params.deviceId,
+      req.params.pointId,
+      req.body || {},
+    );
+    if (!result) return res.status(404).json({ error: 'Managed point not found' });
+    res.json({ success: true, point: result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/managed/:deviceId/points/:pointId/refresh', async (req, res, next) => {
+  try {
+    const result = await managedPoints.refreshPoint(
+      req.params.deviceId,
+      req.params.pointId,
+      { async: req.body?.async === true },
+    );
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.post('/clear', (_req, res) => {
   const result = deviceService.clearInventory();
   logsService.addLog({ level: 'info', service: 'bacnet', message: 'Device inventory cleared' });

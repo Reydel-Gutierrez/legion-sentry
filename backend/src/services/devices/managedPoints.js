@@ -1,7 +1,10 @@
 const managedDevices = require('./managedDevices');
 const pointsStore = require('./managedPointsStore');
 const bacnetMstpService = require('../bacnet/bacnetMstp.service');
-const { sanitizeText } = require('../bacnet/bacnetApduCodec');
+const fieldExecutionEngine = require('../execution/fieldExecutionEngine');
+const pointCache = require('../execution/pointCache');
+const { createPollDefaults, isValidPollGroup, getPollIntervalMs } = require('../execution/pollConfig');
+const { sanitizeText, BACNET_PROPERTIES } = require('../bacnet/bacnetApduCodec');
 
 function useMockData() {
   return process.env.MOCK_DATA === 'true';
@@ -13,11 +16,15 @@ function pointKey(managedDeviceId, objectType, objectInstance) {
 }
 
 function normalizePointForApi(point) {
+  const device = managedDevices.getManagedDeviceById(point.managedDeviceId)?.device;
+  const quality = pointCache.derivePointQuality(point, device?.deviceQuality);
   return {
     ...point,
     objectName: sanitizeText(point.objectName),
     description: sanitizeText(point.description),
     status: formatStatusFlags(point.statusFlags),
+    quality,
+    pollIntervalMs: getPollIntervalMs(point.pollGroup, point.pollIntervalMs),
   };
 }
 
@@ -104,6 +111,31 @@ function mergeDiscoveredPoints(managedDeviceId, discoveredPoints) {
     const key = pointKey(managedDeviceId, discovered.objectType, discovered.objectInstance);
     const prev = byKey.get(key);
     const id = pointsStore.generatePointId(managedDeviceId, discovered.objectType, discovered.objectInstance);
+    const pollDefaults = prev
+      ? {}
+      : createPollDefaults(discovered.objectType);
+    const cacheFields = prev
+      ? {
+        pollGroup: prev.pollGroup,
+        pollingEnabled: prev.pollingEnabled,
+        pollIntervalMs: prev.pollIntervalMs,
+        staleAfterMs: prev.staleAfterMs,
+        nextPollAt: prev.nextPollAt,
+        quality: prev.quality,
+        failureCount: prev.failureCount,
+        lastError: prev.lastError,
+        previousValue: prev.previousValue,
+        lastSuccessfulReadAt: prev.lastSuccessfulReadAt,
+        lastPollAt: prev.lastPollAt,
+        valueChangedAt: prev.valueChangedAt,
+      }
+      : pointCache.createCacheFields({
+        ...pollDefaults,
+        presentValue: discovered.presentValue,
+        lastReadAt: discovered.lastReadAt || now,
+        lastSuccessfulReadAt: discovered.lastReadAt || now,
+      });
+
     const next = {
       id,
       managedDeviceId,
@@ -118,7 +150,8 @@ function mergeDiscoveredPoints(managedDeviceId, discoveredPoints) {
       statusFlags: discovered.statusFlags ?? prev?.statusFlags ?? null,
       outOfService: discovered.outOfService ?? prev?.outOfService ?? null,
       discoveredAt: prev?.discoveredAt || discovered.discoveredAt || now,
-      lastReadAt: discovered.lastReadAt || now,
+      lastReadAt: discovered.lastReadAt || prev?.lastReadAt || now,
+      ...cacheFields,
     };
     byKey.set(key, next);
   }
@@ -243,10 +276,64 @@ async function discoverPointsForManagedDevice(managedDeviceId) {
   return runPointDiscovery(managedDeviceId);
 }
 
+function updatePointPollingConfig(managedDeviceId, pointId, patch) {
+  const device = getManagedDeviceRecord(managedDeviceId);
+  if (!device) return null;
+
+  const point = pointsStore.loadPoints().find((p) => p.id === pointId && p.managedDeviceId === managedDeviceId);
+  if (!point) return null;
+
+  if (patch.pollGroup != null && !isValidPollGroup(patch.pollGroup)) {
+    const error = new Error(`Invalid poll group: ${patch.pollGroup}`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const updated = pointCache.updatePollConfig(pointId, patch);
+  return normalizePointForApi(updated);
+}
+
+async function refreshPoint(managedDeviceId, pointId, options = {}) {
+  const device = validateManagedDeviceForPointDiscovery(getManagedDeviceRecord(managedDeviceId));
+  const point = pointsStore.loadPoints().find((p) => p.id === pointId && p.managedDeviceId === managedDeviceId);
+  if (!point) {
+    const error = new Error('Managed point not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const runAsync = options.async === true;
+  const job = fieldExecutionEngine.submitReadProperty({
+    source: 'ui',
+    managedDeviceId: device.id,
+    managedPointId: point.id,
+    objectType: point.objectType,
+    objectInstance: point.objectInstance,
+    propertyIdentifier: BACNET_PROPERTIES.presentValue,
+    maxRetries: 2,
+    timeoutMs: 30000,
+  });
+
+  if (runAsync) {
+    return { success: true, jobId: job.id, job };
+  }
+
+  const completed = await fieldExecutionEngine.waitForJob(job.id, 30000);
+  return {
+    success: true,
+    point: normalizePointForApi(
+      pointsStore.loadPoints().find((p) => p.id === pointId) || point,
+    ),
+    job: completed,
+  };
+}
+
 module.exports = {
   listPointsByManagedDeviceId,
   discoverPointsForManagedDevice,
   runPointDiscovery,
   clearPointsForManagedDevice,
   normalizePointForApi,
+  updatePointPollingConfig,
+  refreshPoint,
 };

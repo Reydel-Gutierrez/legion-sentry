@@ -28,6 +28,11 @@ function lazyFieldExecutionEngine() {
   return require('./fieldExecutionEngine');
 }
 
+function lazyDeviceHealthPoller() {
+  // eslint-disable-next-line global-require
+  return require('./deviceHealthPoller');
+}
+
 function lazyPointPollingEngine() {
   // eslint-disable-next-line global-require
   return require('./pointPollingEngine');
@@ -57,6 +62,7 @@ async function prepareForDiscovery() {
 
   lazyPointPollingEngine().pauseForDiscovery();
   lazyFieldExecutionEngine().pauseForDiscovery();
+  lazyDeviceHealthPoller().pauseForDiscovery();
 
   log('info', 'Polling paused because discovery started');
   log('info', 'Execution paused because discovery is active');
@@ -76,6 +82,7 @@ function resumeAfterDiscovery() {
 
   lazyPointPollingEngine().resumeFromDiscovery();
   lazyFieldExecutionEngine().resumeFromDiscovery();
+  lazyDeviceHealthPoller().resumeFromDiscovery();
 
   log('info', 'Discovery completed; execution resumed');
 }

@@ -1,7 +1,6 @@
 const jobsStore = require('./executionJobsStore');
 const managedPoints = require('../devices/managedPoints');
 const managedDevices = require('../devices/managedDevices');
-const pointsStore = require('../devices/managedPointsStore');
 const bacnetMstpService = require('../bacnet/bacnetMstp.service');
 const mstpBusCoordinator = require('./mstpBusCoordinator');
 const { BACNET_PROPERTIES } = require('../bacnet/bacnetApduCodec');
@@ -29,8 +28,10 @@ const TERMINAL_STATUSES = new Set([
 ]);
 
 const SOURCE_PRIORITY = {
-  ui: 50,
-  'legion-server': 40,
+  ui: 60,
+  'legion-server': 55,
+  'device-health': 45,
+  'point-discovery': 30,
   polling: 10,
 };
 
@@ -40,8 +41,11 @@ const DEFAULT_POINT_TIMEOUT_MS = DEFAULT_TIMEOUT_MS;
 const WORKER_INTERVAL_MS = 100;
 const JOB_WAIT_POLL_MS = 250;
 const MAX_JOBS_RETAINED = 500;
+const MAX_POLLING_JOBS_RETAINED = 100;
 const JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const POLLING_JOB_MAX_AGE_MS = 60 * 60 * 1000;
 const QUEUE_WARN_THRESHOLD = 50;
+const GLOBAL_QUEUE_LIMIT = 50;
 const ACTIVE_JOB_WAIT_MS = 30000;
 
 let activeJobId = null;
@@ -53,6 +57,16 @@ const cancelFlags = new Map();
 function lazyPointPollingEngine() {
   // eslint-disable-next-line global-require
   return require('./pointPollingEngine');
+}
+
+function lazyDeviceHealthPoller() {
+  // eslint-disable-next-line global-require
+  return require('./deviceHealthPoller');
+}
+
+function lazyPointCache() {
+  // eslint-disable-next-line global-require
+  return require('./pointCache');
 }
 
 function isActiveStatus(status) {
@@ -67,10 +81,27 @@ function trimJobs(jobs) {
   const recentTerminal = terminal.filter((job) => {
     const stamp = job.completedAt || job.cancelledAt || job.createdAt;
     if (!stamp) return true;
-    return now - new Date(stamp).getTime() < JOB_MAX_AGE_MS;
+    const maxAge = job.source === 'polling' ? POLLING_JOB_MAX_AGE_MS : JOB_MAX_AGE_MS;
+    return now - new Date(stamp).getTime() < maxAge;
   });
 
   let combined = [...active, ...recentTerminal];
+  combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const pollingTerminal = combined.filter((job) => job.source === 'polling' && isTerminalStatus(job.status));
+  const nonPolling = combined.filter((job) => job.source !== 'polling' || !isTerminalStatus(job.status));
+  const keptPolling = pollingTerminal.slice(0, MAX_POLLING_JOBS_RETAINED);
+  const pollingIds = new Set(keptPolling.map((j) => j.id));
+  combined = [
+    ...nonPolling,
+    ...keptPolling,
+  ].filter((job, _i, arr) => {
+    if (job.source === 'polling' && isTerminalStatus(job.status) && !pollingIds.has(job.id)) {
+      return false;
+    }
+    return true;
+  });
+
   combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   if (combined.length > MAX_JOBS_RETAINED) {
@@ -134,6 +165,14 @@ function countPollingPendingJobs() {
   return jobsStore.loadJobs().filter((job) => job.source === 'polling'
     && (job.status === JOB_STATUS.QUEUED
       || isActiveStatus(job.status))).length;
+}
+
+function countQueuedJobs() {
+  return jobsStore.loadJobs().filter((job) => job.status === JOB_STATUS.QUEUED).length;
+}
+
+function isQueueFull() {
+  return countQueuedJobs() >= GLOBAL_QUEUE_LIMIT;
 }
 
 function pauseForDiscovery() {
@@ -341,6 +380,18 @@ function cancelQueuedJobs() {
   return { cancelled };
 }
 
+function cancelQueuedPollingJobs() {
+  const jobs = jobsStore.loadJobs();
+  let cancelled = 0;
+  for (const job of jobs) {
+    if (job.source === 'polling' && job.status === JOB_STATUS.QUEUED) {
+      cancelJob(job.id);
+      cancelled += 1;
+    }
+  }
+  return { cancelled };
+}
+
 function getExecutionStatus() {
   const jobs = jobsStore.loadJobs();
   const counts = summarizeJobs(jobs);
@@ -349,6 +400,7 @@ function getExecutionStatus() {
   const pollingQueued = countPollingPendingJobs();
   const coordinator = mstpBusCoordinator.getCoordinatorStatus();
   const polling = lazyPointPollingEngine().getStatus();
+  const deviceHealth = lazyDeviceHealthPoller().getStatus();
   const paused = isExecutionPaused();
   const queueOverLimit = counts.queued >= QUEUE_WARN_THRESHOLD
     || pollingQueued >= QUEUE_WARN_THRESHOLD;
@@ -369,11 +421,14 @@ function getExecutionStatus() {
     pauseMessage: paused ? (coordinator.pauseMessage || 'Paused — discovery running') : null,
     bus: coordinator,
     polling,
+    deviceHealth,
+    pointQualityCounts: polling.pointQualityCounts || {},
     queueHealth: {
       queued: counts.queued,
       pollingQueued,
       failed: counts.failed,
       warnThreshold: QUEUE_WARN_THRESHOLD,
+      globalLimit: GLOBAL_QUEUE_LIMIT,
       overLimit: queueOverLimit,
       warning: queueOverLimit
         ? `Queue has ${counts.queued} queued job(s); polling may be throttled`
@@ -387,17 +442,46 @@ function hasPendingJobForPoint(managedPointId) {
     && !isTerminalStatus(job.status));
 }
 
-function applyPollingReadResult(job, result) {
-  if (job.source !== 'polling' || !job.managedPointId) return;
-  const points = pointsStore.loadPoints();
-  const index = points.findIndex((point) => point.id === job.managedPointId);
-  if (index < 0) return;
-  points[index] = {
-    ...points[index],
-    presentValue: result.value ?? points[index].presentValue,
-    lastReadAt: result.lastReadAt || new Date().toISOString(),
-  };
-  pointsStore.savePoints(points);
+function hasPendingJobForDevice(managedDeviceId, source) {
+  return jobsStore.loadJobs().some((job) => job.managedDeviceId === managedDeviceId
+    && job.source === source
+    && !isTerminalStatus(job.status));
+}
+
+function getDeviceQuality(managedDeviceId) {
+  const device = managedDevices.getManagedDeviceById(managedDeviceId)?.device;
+  return device?.deviceQuality || 'unknown';
+}
+
+function applyReadResult(job, result) {
+  if (job.source === 'device-health' && job.managedDeviceId) {
+    lazyDeviceHealthPoller().recordHeartbeatSuccess(job.managedDeviceId);
+    return;
+  }
+
+  if (!job.managedPointId) return;
+
+  const deviceQuality = getDeviceQuality(job.managedDeviceId);
+  if (job.source === 'polling' || job.source === 'ui' || job.source === 'legion-server') {
+    lazyPointCache().applyReadSuccess(job.managedPointId, result.value, {
+      deviceQuality,
+      scheduleNext: job.source === 'polling',
+    });
+  }
+}
+
+function applyReadFailure(job, errorMessage) {
+  if (job.source === 'device-health' && job.managedDeviceId) {
+    lazyDeviceHealthPoller().recordHeartbeatFailure(job.managedDeviceId, errorMessage);
+    return;
+  }
+
+  if (!job.managedPointId) return;
+
+  const deviceQuality = getDeviceQuality(job.managedDeviceId);
+  if (job.source === 'polling' || job.source === 'ui') {
+    lazyPointCache().applyReadFailure(job.managedPointId, errorMessage, { deviceQuality });
+  }
 }
 
 async function executeReadProperty(job) {
@@ -406,6 +490,7 @@ async function executeReadProperty(job) {
     objectType,
     objectInstance,
     propertyIdentifier,
+    fallbackPropertyIdentifier,
   } = job.request;
 
   if (!managedDeviceId || objectType == null || objectInstance == null || propertyIdentifier == null) {
@@ -459,18 +544,32 @@ async function executeReadProperty(job) {
     });
   };
 
-  const result = await bacnetMstpService.readPropertyForDevice({
+  const readOnce = async (propId) => bacnetMstpService.readPropertyForDevice({
     managedDevice: device,
     objectType,
     objectInstance,
-    propertyIdentifier,
+    propertyIdentifier: propId,
     shouldCancel: () => shouldCancelJob(job.id),
     onTokenWait,
     onExecuting,
   });
 
-  updateJob(job.id, { progress: 100, progressMessage: 'Read complete' });
-  return result;
+  try {
+    const result = await readOnce(propertyIdentifier);
+    updateJob(job.id, { progress: 100, progressMessage: 'Read complete' });
+    return result;
+  } catch (primaryErr) {
+    if (!fallbackPropertyIdentifier || fallbackPropertyIdentifier === propertyIdentifier) {
+      throw primaryErr;
+    }
+    updateJob(job.id, {
+      progress: 50,
+      progressMessage: 'Retrying with fallback property',
+    });
+    const result = await readOnce(fallbackPropertyIdentifier);
+    updateJob(job.id, { progress: 100, progressMessage: 'Read complete (fallback)' });
+    return result;
+  }
 }
 
 async function executeDiscoverPoints(job) {
@@ -506,7 +605,7 @@ async function executeDiscoverPoints(job) {
 async function runJobAttempt(job) {
   if (job.type === JOB_TYPES.READ_PROPERTY) {
     const result = await executeReadProperty(job);
-    applyPollingReadResult(job, result);
+    applyReadResult(job, result);
     return result;
   }
   if (job.type === JOB_TYPES.DISCOVER_POINTS) {
@@ -551,9 +650,6 @@ async function processActiveJob(job) {
         const result = await runJobAttempt(readJobRecord(job.id));
         const completedAt = new Date().toISOString();
         cancelFlags.delete(job.id);
-        if (job.source === 'polling' && job.managedPointId) {
-          lazyPointPollingEngine().recordPollSuccess(job.managedPointId);
-        }
         return updateJob(job.id, {
           status: JOB_STATUS.COMPLETED,
           result,
@@ -608,9 +704,7 @@ async function workerTick() {
       });
     } else {
       const current = readJobRecord(next.id);
-      if (next.source === 'polling' && next.managedPointId) {
-        lazyPointPollingEngine().recordPollFailure(next.managedPointId);
-      }
+      applyReadFailure(next, err.message || 'Job failed');
       updateJob(next.id, {
         status: JOB_STATUS.FAILED,
         error: err.message || 'Job failed',
@@ -726,6 +820,7 @@ function submitReadProperty(payload = {}) {
       objectType: payload.objectType,
       objectInstance: payload.objectInstance,
       propertyIdentifier: payload.propertyIdentifier,
+      fallbackPropertyIdentifier: payload.fallbackPropertyIdentifier,
     },
     maxRetries: payload.maxRetries,
     timeoutMs: payload.timeoutMs || DEFAULT_POINT_TIMEOUT_MS,
@@ -740,6 +835,7 @@ module.exports = {
   getJobById,
   cancelJob,
   cancelQueuedJobs,
+  cancelQueuedPollingJobs,
   clearCompletedJobs,
   clearFailedJobs,
   getExecutionStatus,
@@ -752,5 +848,7 @@ module.exports = {
   discoverPointsForManagedDevice,
   submitReadProperty,
   hasPendingJobForPoint,
+  hasPendingJobForDevice,
   countPollingPendingJobs,
+  isQueueFull,
 };

@@ -41,6 +41,7 @@ function computeMstpStatus(device) {
 
 function normalizeManagedDeviceForApi(device) {
   const { mstpStatus, seenInLatestScan, status } = computeMstpStatus(device);
+  const pointSummary = lazyPointSummary(device.id);
   return {
     ...device,
     vendor: device.vendor ?? device.vendorName ?? null,
@@ -51,6 +52,65 @@ function normalizeManagedDeviceForApi(device) {
     latestDiscoverySessionId: latestMstpDiscoverySessionId,
     lastDiscoverySessionId: device.discoverySessionId ?? null,
     missedScans: device.missedScans ?? 0,
+    deviceQuality: device.deviceQuality ?? 'unknown',
+    lastHeartbeatAt: device.lastHeartbeatAt ?? null,
+    heartbeatFailureCount: device.heartbeatFailureCount ?? 0,
+    lastHeartbeatError: device.lastHeartbeatError ?? null,
+    ...pointSummary,
+  };
+}
+
+function lazyPointSummary(managedDeviceId) {
+  try {
+    // eslint-disable-next-line global-require
+    const pointCache = require('../execution/pointCache');
+    return pointCache.summarizeDevicePoints(managedDeviceId);
+  } catch {
+    return {
+      managedPointCount: 0,
+      onlinePoints: 0,
+      stalePoints: 0,
+      offlinePoints: 0,
+    };
+  }
+}
+
+function qualityFromHeartbeatFailures(count) {
+  if (count >= 3) return 'offline';
+  if (count === 2) return 'stale';
+  if (count === 1) return 'degraded';
+  return 'online';
+}
+
+function recordHeartbeatResult(managedDeviceId, { success, error }) {
+  const managedList = managed.loadManaged();
+  const index = managedList.findIndex((d) => d.id === managedDeviceId);
+  if (index < 0) return null;
+
+  const current = managedList[index];
+  const now = new Date().toISOString();
+  let heartbeatFailureCount = current.heartbeatFailureCount ?? 0;
+
+  if (success) {
+    heartbeatFailureCount = 0;
+  } else {
+    heartbeatFailureCount += 1;
+  }
+
+  const next = {
+    ...current,
+    lastHeartbeatAt: now,
+    heartbeatFailureCount,
+    deviceQuality: qualityFromHeartbeatFailures(heartbeatFailureCount),
+    lastHeartbeatError: success ? null : (error || 'Heartbeat failed'),
+  };
+
+  managedList[index] = next;
+  managed.saveManaged(managedList);
+
+  return {
+    success: true,
+    device: normalizeManagedDeviceForApi(next),
   };
 }
 
@@ -246,4 +306,5 @@ module.exports = {
   isDeviceManaged,
   managedDeviceKey,
   normalizeManagedDeviceForApi,
+  recordHeartbeatResult,
 };

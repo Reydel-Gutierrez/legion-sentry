@@ -2,38 +2,25 @@ const fieldExecutionEngine = require('./fieldExecutionEngine');
 const mstpBusCoordinator = require('./mstpBusCoordinator');
 const managedDevices = require('../devices/managedDevices');
 const pointsStore = require('../devices/managedPointsStore');
+const pointCache = require('./pointCache');
 const logsService = require('../logs');
+const { getPollIntervalMs, POLL_GROUPS } = require('./pollConfig');
 const { BACNET_PROPERTIES } = require('../bacnet/bacnetApduCodec');
 
-const DEFAULT_POLL_INTERVAL_MS = 5000;
+const SCHEDULER_INTERVAL_MS = 1000;
 const MAX_POLLING_QUEUE_SIZE = 50;
 const QUEUE_WARN_THRESHOLD = 50;
+const MAX_DUE_POINTS_PER_TICK = 10;
 
-const POLLABLE_MSTP_STATUSES = new Set(['seen_latest_scan', 'recently_seen']);
-
-const BACKOFF_MS = {
-  first: 30 * 1000,
-  repeated: 2 * 60 * 1000,
-  many: 5 * 60 * 1000,
-};
-const MANY_FAILURES_THRESHOLD = 5;
-
-let pollTimer = null;
+let schedulerTimer = null;
 let running = false;
 let pausedForDiscovery = false;
+let userPaused = false;
 let lastQueueLimitLogAt = 0;
-let lastStaleLogAt = 0;
-const lastDupLogAt = new Map();
 let lastStatus = {};
-
-const pollBackoff = new Map();
 
 function log(level, message) {
   logsService.addLog({ level, service: 'bacnet', message });
-}
-
-function getPollIntervalMs() {
-  return DEFAULT_POLL_INTERVAL_MS;
 }
 
 function getDeviceMap() {
@@ -43,43 +30,39 @@ function getDeviceMap() {
 
 function isDevicePollable(device) {
   if (!device?.enabled) return false;
-  return POLLABLE_MSTP_STATUSES.has(device.mstpStatus);
-}
-
-function getPollablePoints() {
-  const deviceMap = getDeviceMap();
-  return pointsStore.loadPoints().filter((point) => {
-    const device = deviceMap.get(point.managedDeviceId);
-    return device && isDevicePollable(device);
-  });
-}
-
-function recordPollFailure(pointId) {
-  const entry = pollBackoff.get(pointId) || { failures: 0, nextRetryAt: 0 };
-  entry.failures += 1;
-  let delayMs = BACKOFF_MS.first;
-  if (entry.failures >= MANY_FAILURES_THRESHOLD) {
-    delayMs = BACKOFF_MS.many;
-  } else if (entry.failures > 1) {
-    delayMs = BACKOFF_MS.repeated;
-  }
-  entry.nextRetryAt = Date.now() + delayMs;
-  pollBackoff.set(pointId, entry);
-}
-
-function recordPollSuccess(pointId) {
-  pollBackoff.delete(pointId);
-}
-
-function isPointInBackoff(pointId) {
-  const entry = pollBackoff.get(pointId);
-  if (!entry) return false;
-  if (Date.now() >= entry.nextRetryAt) return false;
+  const quality = device.deviceQuality;
+  if (quality === 'offline') return false;
   return true;
 }
 
-function countPollingQueuedJobs() {
-  return fieldExecutionEngine.countPollingPendingJobs();
+function isPointDue(point) {
+  if (!point.pollingEnabled || point.pollGroup === POLL_GROUPS.manual) return false;
+  if (!point.nextPollAt) return true;
+  return Date.now() >= new Date(point.nextPollAt).getTime();
+}
+
+function getDuePoints() {
+  const deviceMap = getDeviceMap();
+  return pointsStore.loadPoints()
+    .filter((point) => {
+      const device = deviceMap.get(point.managedDeviceId);
+      if (!device || !isDevicePollable(device)) return false;
+      if (!point.pollingEnabled || point.pollGroup === POLL_GROUPS.manual) return false;
+      return isPointDue(point);
+    })
+    .sort((a, b) => {
+      const aDue = a.nextPollAt ? new Date(a.nextPollAt).getTime() : 0;
+      const bDue = b.nextPollAt ? new Date(b.nextPollAt).getTime() : 0;
+      return aDue - bDue;
+    });
+}
+
+function countPollablePoints() {
+  const deviceMap = getDeviceMap();
+  return pointsStore.loadPoints().filter((point) => {
+    const device = deviceMap.get(point.managedDeviceId);
+    return device && isDevicePollable(device) && point.pollingEnabled && point.pollGroup !== POLL_GROUPS.manual;
+  }).length;
 }
 
 function pauseForDiscovery() {
@@ -90,64 +73,60 @@ function resumeFromDiscovery() {
   pausedForDiscovery = false;
 }
 
+function pause() {
+  userPaused = true;
+}
+
+function resume() {
+  userPaused = false;
+}
+
 function isPaused() {
-  return pausedForDiscovery || !running;
+  return pausedForDiscovery || userPaused || !running;
 }
 
 function tick() {
-  if (!running || pausedForDiscovery) return;
+  if (!running || pausedForDiscovery || userPaused) return;
   if (!mstpBusCoordinator.canCreatePollingJobs()) return;
 
-  const pollingQueued = countPollingQueuedJobs();
-  if (pollingQueued >= MAX_POLLING_QUEUE_SIZE) {
+  const pollingQueued = fieldExecutionEngine.countPollingPendingJobs();
+  if (pollingQueued >= MAX_POLLING_QUEUE_SIZE || fieldExecutionEngine.isQueueFull()) {
     const now = Date.now();
-    if (now - lastQueueLimitLogAt >= getPollIntervalMs()) {
-      log('warn', 'Polling skipped because execution queue above limit');
+    if (now - lastQueueLimitLogAt >= 30000) {
+      log('warn', 'Point polling skipped — execution queue at limit');
       lastQueueLimitLogAt = now;
     }
     lastStatus = {
       ...lastStatus,
       backpressure: true,
-      lastSkipReason: 'execution queue above limit',
+      lastSkipReason: 'execution queue at limit',
+      pollingQueued,
     };
     return;
   }
 
   const deviceMap = getDeviceMap();
-  const points = pointsStore.loadPoints();
-  let skippedStale = 0;
-  let skippedDup = 0;
-  let skippedBackoff = 0;
+  const duePoints = getDuePoints();
   let submitted = 0;
+  let skippedDup = 0;
 
-  for (const point of points) {
-    const device = deviceMap.get(point.managedDeviceId);
-    if (!device?.enabled) continue;
-
-    if (!isDevicePollable(device)) {
-      if (!POLLABLE_MSTP_STATUSES.has(device.mstpStatus)) {
-        skippedStale += 1;
-      }
-      continue;
-    }
+  for (const point of duePoints) {
+    if (submitted >= MAX_DUE_POINTS_PER_TICK) break;
+    if (fieldExecutionEngine.countPollingPendingJobs() >= MAX_POLLING_QUEUE_SIZE) break;
+    if (fieldExecutionEngine.isQueueFull()) break;
 
     if (fieldExecutionEngine.hasPendingJobForPoint(point.id)) {
       skippedDup += 1;
-      const lastLogged = lastDupLogAt.get(point.id) || 0;
-      if (Date.now() - lastLogged >= getPollIntervalMs()) {
-        log('info', `Polling skipped for point ${point.id} because job already queued`);
-        lastDupLogAt.set(point.id, Date.now());
-      }
       continue;
     }
 
-    if (isPointInBackoff(point.id)) {
-      skippedBackoff += 1;
-      continue;
-    }
-
-    if (countPollingQueuedJobs() >= MAX_POLLING_QUEUE_SIZE) {
-      break;
+    const device = deviceMap.get(point.managedDeviceId);
+    const nowIso = new Date().toISOString();
+    const points = pointsStore.loadPoints();
+    const idx = points.findIndex((p) => p.id === point.id);
+    if (idx >= 0) {
+      points[idx] = { ...points[idx], lastPollAt: nowIso };
+      pointsStore.savePoints(points);
     }
 
     fieldExecutionEngine.submitReadProperty({
@@ -163,76 +142,66 @@ function tick() {
     submitted += 1;
   }
 
-  if (skippedStale > 0) {
-    const now = Date.now();
-    if (now - lastStaleLogAt >= getPollIntervalMs()) {
-      const staleDevices = [...deviceMap.values()].filter(
-        (d) => d.enabled && !POLLABLE_MSTP_STATUSES.has(d.mstpStatus),
-      );
-      for (const device of staleDevices) {
-        log('info', `Polling paused for device MAC ${device.mstpMacAddress} because device is stale`);
-      }
-      lastStaleLogAt = now;
-    }
-  }
-
   lastStatus = {
     submitted,
-    skippedStale,
     skippedDup,
-    skippedBackoff,
-    pollingQueued: countPollingQueuedJobs(),
+    duePoints: duePoints.length,
+    pollingQueued: fieldExecutionEngine.countPollingPendingJobs(),
     backpressure: false,
-    pollablePoints: getPollablePoints().length,
+    pollablePoints: countPollablePoints(),
   };
 }
 
 function start() {
-  if (pollTimer) return;
+  if (schedulerTimer) return;
   running = true;
-  pollTimer = setInterval(() => {
-    tick();
-  }, getPollIntervalMs());
+  schedulerTimer = setInterval(tick, SCHEDULER_INTERVAL_MS);
 }
 
 function stop() {
   running = false;
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
+  if (schedulerTimer) {
+    clearInterval(schedulerTimer);
+    schedulerTimer = null;
   }
 }
 
 function getStatus() {
   const deviceMap = getDeviceMap();
-  const staleDevices = [...deviceMap.values()]
-    .filter((d) => d.enabled && !POLLABLE_MSTP_STATUSES.has(d.mstpStatus))
-    .map((d) => ({
-      managedDeviceId: d.id,
-      mstpMacAddress: d.mstpMacAddress,
-      mstpStatus: d.mstpStatus,
-      reason: 'Device not recently seen',
-    }));
+  const allPoints = pointsStore.loadPoints();
+  const qualityCounts = {
+    online: 0, stale: 0, offline: 0, offline_by_device: 0,
+    stale_by_device: 0, unknown: 0, error: 0,
+  };
+
+  for (const point of allPoints) {
+    const device = deviceMap.get(point.managedDeviceId);
+    const q = pointCache.derivePointQuality(point, device?.deviceQuality);
+    if (qualityCounts[q] != null) qualityCounts[q] += 1;
+    else qualityCounts.unknown += 1;
+  }
 
   let mode = 'running';
   if (!running) mode = 'disabled';
-  else if (pausedForDiscovery) mode = 'paused';
+  else if (pausedForDiscovery || userPaused) mode = 'paused';
   else if (mstpBusCoordinator.isDiscoveryActive()) mode = 'paused';
-  else if (lastStatus.backpressure || countPollingQueuedJobs() >= QUEUE_WARN_THRESHOLD) mode = 'backpressure';
+  else if (lastStatus.backpressure || fieldExecutionEngine.countPollingPendingJobs() >= QUEUE_WARN_THRESHOLD) {
+    mode = 'backpressure';
+  }
 
   return {
     running,
-    paused: pausedForDiscovery || mstpBusCoordinator.isDiscoveryActive(),
-    pauseReason: pausedForDiscovery ? 'discovery' : null,
+    paused: pausedForDiscovery || userPaused || mstpBusCoordinator.isDiscoveryActive(),
+    pauseReason: pausedForDiscovery ? 'discovery' : userPaused ? 'user' : null,
     mode,
-    pollIntervalMs: getPollIntervalMs(),
-    pollablePoints: getPollablePoints().length,
-    pollingQueuedJobs: countPollingQueuedJobs(),
+    schedulerIntervalMs: SCHEDULER_INTERVAL_MS,
+    pollablePoints: countPollablePoints(),
+    duePoints: getDuePoints().length,
+    pollingQueuedJobs: fieldExecutionEngine.countPollingPendingJobs(),
     maxPollingQueueSize: MAX_POLLING_QUEUE_SIZE,
     queueWarnThreshold: QUEUE_WARN_THRESHOLD,
-    staleDevices,
+    pointQualityCounts: qualityCounts,
     lastTick: lastStatus,
-    backoffPoints: pollBackoff.size,
   };
 }
 
@@ -243,9 +212,10 @@ module.exports = {
   tick,
   pauseForDiscovery,
   resumeFromDiscovery,
+  pause,
+  resume,
   isPaused,
-  recordPollFailure,
-  recordPollSuccess,
   isDevicePollable,
   MAX_POLLING_QUEUE_SIZE,
+  getPollIntervalMs,
 };

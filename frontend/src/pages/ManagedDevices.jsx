@@ -23,12 +23,40 @@ const MSTP_STATUS_META = {
   never_confirmed: { tone: 'neutral', label: 'Unknown' },
 };
 
+const DEVICE_QUALITY_TONE = {
+  online: 'success',
+  degraded: 'warn',
+  stale: 'warn',
+  offline: 'danger',
+  unknown: 'neutral',
+};
+
+const POINT_QUALITY_TONE = {
+  online: 'success',
+  stale: 'warn',
+  offline: 'danger',
+  offline_by_device: 'danger',
+  stale_by_device: 'warn',
+  unknown: 'neutral',
+  error: 'danger',
+};
+
+const POLL_GROUPS = ['fast', 'normal', 'slow', 'manual'];
+
 function mstpStatusChip(device) {
   const meta = MSTP_STATUS_META[device.mstpStatus] || MSTP_STATUS_META.never_confirmed;
-  const title = device.mstpStatus === 'stale'
-    ? 'Managed device was not seen in the latest Who-Is scan.'
-    : undefined;
-  return <StatusChip tone={meta.tone} label={meta.label} title={title} />;
+  return <StatusChip tone={meta.tone} label={meta.label} />;
+}
+
+function deviceQualityChip(device) {
+  const quality = device.deviceQuality || 'unknown';
+  return (
+    <StatusChip
+      tone={DEVICE_QUALITY_TONE[quality] || 'neutral'}
+      label={quality.replace(/_/g, ' ')}
+      title={device.lastHeartbeatError || undefined}
+    />
+  );
 }
 
 function formatPresentValue(value) {
@@ -42,19 +70,86 @@ function PointsPanel({
   points,
   loading,
   discoveryJob,
+  refreshJobs,
   onDiscover,
   onClear,
   onClose,
+  onPollGroupChange,
+  onTogglePolling,
+  onRefreshPoint,
 }) {
   const pointColumns = [
     { key: 'objectType', header: 'Object Type', render: (p) => p.objectTypeLabel || p.objectType },
     { key: 'objectInstance', header: 'Instance', cellClassName: 'mono' },
     { key: 'objectName', header: 'Object Name', render: (p) => p.objectName || '—' },
+    {
+      key: 'pollGroup',
+      header: 'Poll Group',
+      render: (p) => (
+        <select
+          className="form-select form-select-sm"
+          value={p.pollGroup || 'normal'}
+          disabled={loading}
+          onChange={(e) => onPollGroupChange(p, e.target.value)}
+        >
+          {POLL_GROUPS.map((g) => (
+            <option key={g} value={g}>{g}</option>
+          ))}
+        </select>
+      ),
+    },
+    {
+      key: 'pollIntervalMs',
+      header: 'Interval',
+      render: (p) => (p.pollIntervalMs ? `${Math.round(p.pollIntervalMs / 1000)}s` : '—'),
+    },
     { key: 'presentValue', header: 'Present Value', cellClassName: 'mono', render: (p) => formatPresentValue(p.presentValue) },
-    { key: 'units', header: 'Units', render: (p) => p.units ?? '—' },
-    { key: 'reliability', header: 'Reliability', render: (p) => p.reliability ?? '—' },
-    { key: 'status', header: 'Status', render: (p) => p.status || '—' },
+    {
+      key: 'quality',
+      header: 'Quality',
+      render: (p) => (
+        <StatusChip
+          tone={POINT_QUALITY_TONE[p.quality] || 'neutral'}
+          label={(p.quality || 'unknown').replace(/_/g, ' ')}
+          title={p.lastError || undefined}
+        />
+      ),
+    },
     { key: 'lastReadAt', header: 'Last Read', render: (p) => formatLastSeen(p.lastReadAt) },
+    { key: 'nextPollAt', header: 'Next Poll', render: (p) => formatLastSeen(p.nextPollAt) },
+    { key: 'failureCount', header: 'Failures', render: (p) => p.failureCount ?? 0 },
+    {
+      key: 'actions',
+      header: '',
+      align: 'right',
+      render: (p) => {
+        const refreshJob = refreshJobs[p.id];
+        const refreshing = refreshJob && !['completed', 'failed', 'cancelled'].includes(refreshJob.status);
+        return (
+          <div className="d-flex flex-wrap gap-2 justify-content-end">
+            {refreshing && (
+              <div style={{ minWidth: '120px' }}>
+                <ProgressBar value={refreshJob.progress} className="sentry-progress--compact" />
+              </div>
+            )}
+            <ActionButton
+              size="sm"
+              onClick={() => onTogglePolling(p)}
+              disabled={loading}
+            >
+              {p.pollingEnabled ? 'Disable Poll' : 'Enable Poll'}
+            </ActionButton>
+            <ActionButton
+              size="sm"
+              onClick={() => onRefreshPoint(p)}
+              disabled={loading || refreshing || !device.enabled}
+            >
+              Refresh
+            </ActionButton>
+          </div>
+        );
+      },
+    },
   ];
 
   return (
@@ -110,6 +205,7 @@ export default function ManagedDevicesPage() {
   const [viewingDeviceId, setViewingDeviceId] = useState(null);
   const [pointsByDevice, setPointsByDevice] = useState({});
   const [discoveryJobsByDevice, setDiscoveryJobsByDevice] = useState({});
+  const [refreshJobsByPoint, setRefreshJobsByPoint] = useState({});
   const pollTimersRef = useRef({});
 
   const load = () => {
@@ -153,16 +249,15 @@ export default function ManagedDevicesPage() {
 
         if (job.status === 'completed') {
           stopDiscoveryPolling(deviceId);
-          const result = job.result || {};
           try {
             await loadPoints(deviceId);
           } catch {
-            setPointsByDevice((prev) => ({ ...prev, [deviceId]: result.points || [] }));
+            setPointsByDevice((prev) => ({ ...prev, [deviceId]: job.result?.points || [] }));
           }
           setViewingDeviceId(deviceId);
           setMessage({
             type: 'success',
-            text: result.message || `Discovered ${result.pointsFound ?? result.points?.length ?? 0} point(s).`,
+            text: job.result?.message || `Discovered ${job.result?.pointsFound ?? 0} point(s).`,
           });
           setLoading(false);
         } else if (job.status === 'failed' || job.status === 'cancelled') {
@@ -287,23 +382,79 @@ export default function ManagedDevicesPage() {
     }
   };
 
+  const handlePollGroupChange = async (point, pollGroup) => {
+    if (!viewingDeviceId) return;
+    try {
+      const result = await api.updateManagedPoint(viewingDeviceId, point.id, { pollGroup });
+      setPointsByDevice((prev) => ({
+        ...prev,
+        [viewingDeviceId]: (prev[viewingDeviceId] || []).map((p) => (
+          p.id === point.id ? result.point : p
+        )),
+      }));
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleTogglePolling = async (point) => {
+    if (!viewingDeviceId) return;
+    try {
+      const result = await api.updateManagedPoint(viewingDeviceId, point.id, {
+        pollingEnabled: !point.pollingEnabled,
+      });
+      setPointsByDevice((prev) => ({
+        ...prev,
+        [viewingDeviceId]: (prev[viewingDeviceId] || []).map((p) => (
+          p.id === point.id ? result.point : p
+        )),
+      }));
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleRefreshPoint = async (point) => {
+    if (!viewingDeviceId) return;
+    try {
+      const result = await api.refreshManagedPoint(viewingDeviceId, point.id, { async: true });
+      const job = result.job;
+      if (!job?.id) return;
+
+      setRefreshJobsByPoint((prev) => ({ ...prev, [point.id]: job }));
+
+      const timer = setInterval(async () => {
+        try {
+          const updated = await api.getExecutionJob(job.id);
+          setRefreshJobsByPoint((prev) => ({ ...prev, [point.id]: updated }));
+          if (['completed', 'failed', 'cancelled'].includes(updated.status)) {
+            clearInterval(timer);
+            await loadPoints(viewingDeviceId);
+          }
+        } catch {
+          clearInterval(timer);
+        }
+      }, 1000);
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    }
+  };
+
   const viewingDevice = devices.find((d) => d.id === viewingDeviceId) || null;
 
   const enabledCount = devices.filter((d) => d.enabled).length;
-  const lastScan = devices.reduce((latest, d) => {
-    const t = d.lastSeenAt ? new Date(d.lastSeenAt).getTime() : 0;
-    return t > latest ? t : latest;
-  }, 0);
+  const onlineDevices = devices.filter((d) => d.deviceQuality === 'online').length;
 
   const summary = [
     { label: 'Total', value: devices.length },
     { label: 'Enabled', value: enabledCount, variant: 'success' },
+    { label: 'Online', value: onlineDevices, variant: 'success' },
     { label: 'Disabled', value: devices.length - enabledCount },
-    { label: 'Last Scan', value: lastScan ? formatLastSeen(new Date(lastScan).toISOString()) : '—' },
   ];
 
   const columns = [
     { key: 'rediscovery', header: 'Rediscovery', render: (d) => mstpStatusChip(d) },
+    { key: 'health', header: 'Health', render: (d) => deviceQualityChip(d) },
     {
       key: 'enabled',
       header: 'Enabled',
@@ -313,9 +464,26 @@ export default function ManagedDevicesPage() {
     { key: 'mac', header: 'MS/TP MAC', cellClassName: 'mono', render: (d) => d.mstpMacAddress },
     { key: 'deviceInstance', header: 'Instance' },
     { key: 'objectName', header: 'Object Name', render: (d) => d.objectName || '—' },
-    { key: 'vendor', header: 'Vendor', render: (d) => d.vendor || '—' },
-    { key: 'lastSeen', header: 'Last Seen', render: (d) => formatLastSeen(d.lastSeenAt) },
-    { key: 'missed', header: 'Missed', render: (d) => d.missedScans ?? 0 },
+    { key: 'heartbeat', header: 'Last Heartbeat', render: (d) => formatLastSeen(d.lastHeartbeatAt) },
+    { key: 'hbFailures', header: 'HB Failures', render: (d) => d.heartbeatFailureCount ?? 0 },
+    { key: 'points', header: 'Points', render: (d) => d.managedPointCount ?? 0 },
+    {
+      key: 'pointHealth',
+      header: 'Point Status',
+      render: (d) => (
+        <span className="text-muted" style={{ fontSize: '0.85rem' }}>
+          {d.onlinePoints ?? 0}
+          {' '}
+          on /
+          {d.stalePoints ?? 0}
+          {' '}
+          stale /
+          {d.offlinePoints ?? 0}
+          {' '}
+          off
+        </span>
+      ),
+    },
     {
       key: 'actions',
       header: '',
@@ -362,7 +530,7 @@ export default function ManagedDevicesPage() {
     <>
       <PageHeader
         title="Managed MS/TP Devices"
-        subtitle="Persistent field devices promoted from discovery."
+        subtitle="Persistent field devices with heartbeat monitoring and point polling."
         summary={summary}
       />
 
@@ -388,9 +556,13 @@ export default function ManagedDevicesPage() {
           points={pointsByDevice[viewingDevice.id] || []}
           loading={loading}
           discoveryJob={discoveryJobsByDevice[viewingDevice.id]}
+          refreshJobs={refreshJobsByPoint}
           onDiscover={() => handleDiscoverPoints(viewingDevice)}
           onClear={() => handleClearPoints(viewingDevice)}
           onClose={() => setViewingDeviceId(null)}
+          onPollGroupChange={handlePollGroupChange}
+          onTogglePolling={handleTogglePolling}
+          onRefreshPoint={handleRefreshPoint}
         />
       )}
     </>

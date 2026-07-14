@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { atomicWriteJson } = require('../../lib/atomicWrite');
 
 const MANAGED_PATH = path.join(__dirname, '../../data/managedDevices.json');
 
@@ -9,7 +10,7 @@ function ensureManagedFile() {
     fs.mkdirSync(dir, { recursive: true });
   }
   if (!fs.existsSync(MANAGED_PATH)) {
-    fs.writeFileSync(MANAGED_PATH, '[]', 'utf8');
+    atomicWriteJson(MANAGED_PATH, [], { backup: false });
   }
 }
 
@@ -26,7 +27,7 @@ function loadManaged() {
 
 function saveManaged(devices) {
   ensureManagedFile();
-  fs.writeFileSync(MANAGED_PATH, `${JSON.stringify(devices, null, 2)}\n`, 'utf8');
+  atomicWriteJson(MANAGED_PATH, devices, { backup: true });
 }
 
 function generateManagedId(deviceInstance, mstpMacAddress) {

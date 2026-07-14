@@ -27,6 +27,44 @@ npm run dev
 - **UI:** http://localhost:5173
 - **API:** http://localhost:3001/api
 
+## Tests and lint
+
+```bash
+npm test              # backend + frontend
+npm run test:backend
+npm run test:frontend
+npm run lint
+```
+
+Tests mock BACnet/serial hardware and run on a development PC (Node ≥ 16).
+
+## Runtime architecture
+
+See **[docs/RUNTIME_ARCHITECTURE.md](docs/RUNTIME_ARCHITECTURE.md)** for:
+
+- Service ownership and BACnet/IP vs MS/TP boundaries
+- Single MS/TP serial ownership (`bacnetMstp.service`)
+- Operation queue priorities (discovery / point discovery / heartbeat / polling)
+- Point-discovery API contract and error shapes
+
+### Phase 1 limitations
+
+- Writes (`write_property` jobs) are not implemented yet
+- Directed MS/TP Who-Is (unicast) is not fully supported without full token participation modes
+- Diagnostics serial monitor and BACnet MS/TP remain mutually exclusive on the same port
+- Automated UI e2e against live controllers still requires Raspberry Pi + RS-485 hardware
+
+### MS/TP serial ownership
+
+Only `backend/src/services/bacnet/bacnetMstp.service.js` opens the BACnet RS-485 `SerialPort`. Express routes submit work through that runtime (or the diagnostics `serial.service` monitor, which must not run at the same time).
+
+### Reproducing point discovery
+
+1. Open **Managed Devices**
+2. Select an enabled MS/TP managed device → points modal
+3. Click **Discover** / **Scan Again**
+4. Confirm points appear or a structured BACnet/serial error is shown (never `managedPoints.runPointDiscovery is not a function`)
+
 ## Deployment to Raspberry Pi
 
 After pulling updates on the Pi:

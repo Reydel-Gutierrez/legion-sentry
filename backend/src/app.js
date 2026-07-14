@@ -4,6 +4,8 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 
 const requireAuth = require('./middleware/requireAuth');
+const requestId = require('./middleware/requestId');
+const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 const authRoutes = require('./routes/auth');
 const systemRoutes = require('./routes/system');
 const networkRoutes = require('./routes/network');
@@ -20,7 +22,8 @@ const app = express();
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: true, credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
+app.use(requestId);
 app.use(morgan('dev'));
 
 app.get('/api/health', (_req, res) => {
@@ -42,13 +45,7 @@ app.use('/api/devices', devicesRoutes);
 app.use('/api/execution', executionRoutes);
 app.use('/api/interfaces', interfacesRoutes);
 
-app.use((err, _req, res, _next) => {
-  console.error(err);
-  const status = err.statusCode || 500;
-  res.status(status).json({
-    error: err.message || 'Internal server error',
-    code: err.code,
-  });
-});
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 module.exports = app;

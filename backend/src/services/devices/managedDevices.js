@@ -64,10 +64,17 @@ function lazyPointSummary(managedDeviceId) {
   try {
     // eslint-disable-next-line global-require
     const pointCache = require('../execution/pointCache');
-    return pointCache.summarizeDevicePoints(managedDeviceId);
+    // eslint-disable-next-line global-require
+    const discoveredStore = require('./discoveredPointsStore');
+    const summary = pointCache.summarizeDevicePoints(managedDeviceId);
+    return {
+      ...summary,
+      discoveredPointCount: discoveredStore.countForDevice(managedDeviceId),
+    };
   } catch {
     return {
       managedPointCount: 0,
+      discoveredPointCount: 0,
       onlinePoints: 0,
       stalePoints: 0,
       offlinePoints: 0,

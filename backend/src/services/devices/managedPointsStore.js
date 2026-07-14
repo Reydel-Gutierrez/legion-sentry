@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { atomicWriteJson } = require('../../lib/atomicWrite');
 
 const POINTS_PATH = path.join(__dirname, '../../data/managedPoints.json');
 
@@ -9,7 +10,7 @@ function ensurePointsFile() {
     fs.mkdirSync(dir, { recursive: true });
   }
   if (!fs.existsSync(POINTS_PATH)) {
-    fs.writeFileSync(POINTS_PATH, '[]', 'utf8');
+    atomicWriteJson(POINTS_PATH, [], { backup: false });
   }
 }
 
@@ -26,7 +27,7 @@ function loadPoints() {
 
 function savePoints(points) {
   ensurePointsFile();
-  fs.writeFileSync(POINTS_PATH, `${JSON.stringify(points, null, 2)}\n`, 'utf8');
+  atomicWriteJson(POINTS_PATH, points, { backup: true });
 }
 
 function generatePointId(managedDeviceId, objectType, objectInstance) {

@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node test/apiClient.test.mjs",
+    "lint": "node --check src/api/parseApiError.js"
   },
   "dependencies": {
     "bootstrap": "^5.3.3",

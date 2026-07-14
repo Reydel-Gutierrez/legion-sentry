@@ -13,6 +13,7 @@ const {
 } = require('./mstpCrc');
 const { MstpTokenEngine, isValidMstpActivityFrame, PARTICIPATION_MODE } = require('./mstpTokenEngine');
 const bacnetApdu = require('./bacnetApduCodec');
+const { buildRuntimeSnapshot, RUNTIME_STATE } = require('./mstpRuntimeState');
 
 const MSTP_FRAME_TYPE = {
   TOKEN: 0x00,
@@ -310,7 +311,21 @@ function getStatusSnapshot() {
   const tokenEngine = activeDiscovery?.tokenEngine?.getSnapshot()
     || activePointDiscovery?.tokenEngine?.getSnapshot()
     || null;
+  const runtime = buildRuntimeSnapshot({
+    open: interfaceState.open,
+    port: interfaceState.port ?? defaults.port,
+    baudRate: interfaceState.baudRate ?? defaults.baudRate,
+    macAddress: interfaceState.macAddress ?? defaults.macAddress,
+    networkNumber: interfaceState.networkNumber ?? defaults.networkNumber,
+    lastError: interfaceState.lastError,
+    openedAt: interfaceState.openedAt,
+    discoveryInProgress: Boolean(activeDiscovery),
+    pointDiscoveryInProgress: Boolean(activePointDiscovery),
+    fieldReadInProgress: Boolean(activeFieldRead),
+  });
   return {
+    runtimeState: runtime.state,
+    runtime,
     open: interfaceState.open,
     port: interfaceState.port ?? defaults.port,
     baudRate: interfaceState.baudRate ?? defaults.baudRate,
@@ -2331,5 +2346,6 @@ module.exports = {
   buildMstpFrame,
   parseMstpFrames,
   parseIAmApdu,
+  RUNTIME_STATE,
   MstpTokenEngine: require('./mstpTokenEngine').MstpTokenEngine,
 };

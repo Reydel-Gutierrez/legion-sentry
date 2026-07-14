@@ -1,5 +1,5 @@
 const jobsStore = require('./executionJobsStore');
-const managedPoints = require('../devices/managedPoints');
+const pointDiscovery = require('../devices/pointDiscovery');
 const managedDevices = require('../devices/managedDevices');
 const bacnetMstpService = require('../bacnet/bacnetMstp.service');
 const mstpBusCoordinator = require('./mstpBusCoordinator');
@@ -30,8 +30,8 @@ const TERMINAL_STATUSES = new Set([
 const SOURCE_PRIORITY = {
   ui: 60,
   'legion-server': 55,
+  'point-discovery': 70,
   'device-health': 45,
-  'point-discovery': 30,
   polling: 10,
 };
 
@@ -527,6 +527,12 @@ function hasPendingJobForDevice(managedDeviceId, source) {
     && !isTerminalStatus(job.status));
 }
 
+function hasPendingPointDiscovery(managedDeviceId) {
+  return jobsStore.loadJobs().some((job) => job.type === JOB_TYPES.DISCOVER_POINTS
+    && job.managedDeviceId === managedDeviceId
+    && !isTerminalStatus(job.status));
+}
+
 function getDeviceQuality(managedDeviceId) {
   const device = managedDevices.getManagedDeviceById(managedDeviceId)?.device;
   return device?.deviceQuality || 'unknown';
@@ -667,7 +673,9 @@ async function executeDiscoverPoints(job) {
     updateJob(job.id, { progress, progressMessage, status });
   };
 
-  const result = await managedPoints.runPointDiscovery(managedDeviceId, {
+  const result = await pointDiscovery.discoverPointsForDevice({
+    managedDeviceId,
+    requestId: job.request?.requestId,
     onProgress,
     shouldCancel: () => shouldCancelJob(job.id),
   });
@@ -865,18 +873,47 @@ function waitForJob(id, timeoutMs = DEFAULT_TIMEOUT_MS) {
 }
 
 async function discoverPointsForManagedDevice(managedDeviceId, options = {}) {
-  const { source = 'ui', async: runAsync = false, priority } = options;
+  const { source = 'ui', async: runAsync = false, priority, requestId } = options;
+
+  if (!managedDeviceId || typeof managedDeviceId !== 'string') {
+    const error = new Error('managedDeviceId is required');
+    error.statusCode = 400;
+    error.code = 'VALIDATION_ERROR';
+    throw error;
+  }
+
+  if (hasPendingPointDiscovery(managedDeviceId) || pointDiscovery.isPointDiscoveryActive(managedDeviceId)) {
+    const error = new Error('Point discovery is already running for this device.');
+    error.statusCode = 409;
+    error.code = 'POINT_DISCOVERY_ALREADY_RUNNING';
+    error.details = { managedDeviceId };
+    throw error;
+  }
+
+  if (mstpBusCoordinator.isDiscoveryActive()) {
+    const error = new Error('MS/TP device discovery is active — point discovery cannot start yet.');
+    error.statusCode = 409;
+    error.code = 'MSTP_BUS_BUSY';
+    error.details = { managedDeviceId, busyWith: 'device_discovery' };
+    throw error;
+  }
+
+  // Validate early so async jobs fail fast with a clear API error.
+  pointDiscovery.validateManagedDeviceForPointDiscovery(
+    pointDiscovery.getManagedDeviceRecord(managedDeviceId),
+  );
+
   const job = createJob({
     type: JOB_TYPES.DISCOVER_POINTS,
-    source,
-    priority,
+    source: source === 'ui' ? 'point-discovery' : source,
+    priority: priority ?? SOURCE_PRIORITY['point-discovery'],
     managedDeviceId,
-    request: { managedDeviceId },
+    request: { managedDeviceId, requestId },
     timeoutMs: DEFAULT_TIMEOUT_MS,
   });
 
   if (runAsync) {
-    return { success: true, jobId: job.id, job };
+    return { success: true, jobId: job.id, job, requestId };
   }
 
   const completed = await waitForJob(job.id, DEFAULT_TIMEOUT_MS);
@@ -928,6 +965,7 @@ module.exports = {
   submitReadProperty,
   hasPendingJobForPoint,
   hasPendingJobForDevice,
+  hasPendingPointDiscovery,
   countPollingPendingJobs,
   isQueueFull,
 };

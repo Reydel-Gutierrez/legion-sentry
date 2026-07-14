@@ -1,0 +1,23 @@
+{"id":1,"timestamp":"2026-07-14T00:21:18.029Z","level":"info","service":"bacnet","message":"[point_discovery_started] Point discovery started. requestId=req-ok operationId=983f450e17b0 device=managed-mstp-test-mac-7"}
+{"id":2,"timestamp":"2026-07-14T00:21:18.030Z","level":"info","service":"bacnet","message":"[point_discovery_completed] Discovered 1 point(s). requestId=req-ok operationId=983f450e17b0 device=managed-mstp-test-mac-7 durationMs=3"}
+{"id":3,"timestamp":"2026-07-14T00:21:18.031Z","level":"info","service":"bacnet","message":"[point_discovery_started] Point discovery started. requestId=req-1 operationId=afece1ebfbd9 device=managed-mstp-test-mac-7"}
+{"id":4,"timestamp":"2026-07-14T00:21:18.050Z","level":"info","service":"bacnet","message":"[point_discovery_completed] No BACnet objects were discovered on this device. requestId=req-1 operationId=afece1ebfbd9 device=managed-mstp-test-mac-7 durationMs=20"}
+{"id":5,"timestamp":"2026-07-14T00:21:18.054Z","level":"info","service":"bacnet","message":"[point_discovery_started] Point discovery started. operationId=770661980c9a device=managed-mstp-test-mac-7"}
+{"id":6,"timestamp":"2026-07-14T00:21:18.059Z","level":"error","service":"bacnet","message":"[point_discovery_failed] port unavailable operationId=770661980c9a device=managed-mstp-test-mac-7 durationMs=4"}
+{"id":7,"timestamp":"2026-07-14T00:21:18.061Z","level":"info","service":"bacnet","message":"[point_discovery_started] Point discovery started. operationId=a814ca063d31 device=managed-mstp-test-mac-7"}
+{"id":8,"timestamp":"2026-07-14T00:21:18.064Z","level":"info","service":"bacnet","message":"[point_discovery_completed] No BACnet objects were discovered on this device. operationId=a814ca063d31 device=managed-mstp-test-mac-7 durationMs=3"}
+{"id":9,"timestamp":"2026-07-14T00:21:21.178Z","level":"error","service":"system","message":"[request_failed] runtime down requestId=rid"}
+{"id":10,"timestamp":"2026-07-14T00:21:21.179Z","level":"warn","service":"system","message":"[request_failed] bad id requestId=rid"}
+{"id":11,"timestamp":"2026-07-14T00:21:21.179Z","level":"warn","service":"system","message":"[request_failed] Managed device not found requestId=rid"}
+{"id":12,"timestamp":"2026-07-14T00:21:29.661Z","level":"warn","service":"system","message":"[request_failed] Point discovery is already running for this device. requestId=req-1"}
+{"id":13,"timestamp":"2026-07-14T00:21:29.777Z","level":"info","service":"bacnet","message":"[point_discovery_started] Point discovery started. requestId=req-ok operationId=91ca1bb7981d device=managed-mstp-test-mac-7"}
+{"id":14,"timestamp":"2026-07-14T00:21:29.778Z","level":"info","service":"bacnet","message":"[point_discovery_completed] Discovered 1 point(s). requestId=req-ok operationId=91ca1bb7981d device=managed-mstp-test-mac-7 durationMs=2"}
+{"id":15,"timestamp":"2026-07-14T00:21:29.779Z","level":"info","service":"bacnet","message":"[point_discovery_started] Point discovery started. requestId=req-1 operationId=3df74d8247c4 device=managed-mstp-test-mac-7"}
+{"id":16,"timestamp":"2026-07-14T00:21:29.798Z","level":"info","service":"bacnet","message":"[point_discovery_completed] No BACnet objects were discovered on this device. requestId=req-1 operationId=3df74d8247c4 device=managed-mstp-test-mac-7 durationMs=19"}
+{"id":17,"timestamp":"2026-07-14T00:21:29.799Z","level":"info","service":"bacnet","message":"[point_discovery_started] Point discovery started. operationId=ebc0c644dba3 device=managed-mstp-test-mac-7"}
+{"id":18,"timestamp":"2026-07-14T00:21:29.800Z","level":"error","service":"bacnet","message":"[point_discovery_failed] port unavailable operationId=ebc0c644dba3 device=managed-mstp-test-mac-7 durationMs=0"}
+{"id":19,"timestamp":"2026-07-14T00:21:29.800Z","level":"info","service":"bacnet","message":"[point_discovery_started] Point discovery started. operationId=45467df37262 device=managed-mstp-test-mac-7"}
+{"id":20,"timestamp":"2026-07-14T00:21:29.801Z","level":"info","service":"bacnet","message":"[point_discovery_completed] No BACnet objects were discovered on this device. operationId=45467df37262 device=managed-mstp-test-mac-7 durationMs=1"}
+{"id":21,"timestamp":"2026-07-14T00:21:30.054Z","level":"error","service":"system","message":"[request_failed] runtime down requestId=rid"}
+{"id":22,"timestamp":"2026-07-14T00:21:30.055Z","level":"warn","service":"system","message":"[request_failed] bad id requestId=rid"}
+{"id":23,"timestamp":"2026-07-14T00:21:30.056Z","level":"warn","service":"system","message":"[request_failed] Managed device not found requestId=rid"}

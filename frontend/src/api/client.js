@@ -1,5 +1,9 @@
 const API_BASE = '/api';
 
+import { extractErrorMessage } from './parseApiError.js';
+
+const API_BASE = '/api';
+
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
@@ -12,9 +16,10 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    const err = new Error(error.error || error.message || `Request failed: ${response.status}`);
-    err.code = error.code;
+    const err = new Error(extractErrorMessage(error, response.status));
+    err.code = error?.error?.code || error.code;
     err.status = response.status;
+    err.requestId = error?.error?.requestId || error.requestId;
     err.body = error;
     throw err;
   }
@@ -51,9 +56,18 @@ export const api = {
   updateManagedDevice: (id, data) => request(`/devices/managed/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
   unmanageDevice: (id) => request(`/devices/managed/${id}`, { method: 'DELETE' }),
   getManagedDevicePoints: (id) => request(`/devices/managed/${id}/points`),
+  getDiscoveredDevicePoints: (id) => request(`/devices/managed/${id}/discovered-points`),
   discoverManagedDevicePoints: (id, body) => request(`/devices/managed/${id}/discover-points`, {
     method: 'POST',
     body: JSON.stringify(body || {}),
+  }),
+  clearDiscoveredDevicePoints: (id) => request(`/devices/managed/${id}/discovered-points`, { method: 'DELETE' }),
+  manageDevicePoints: (id, pointKeys) => request(`/devices/managed/${id}/points/manage`, {
+    method: 'POST',
+    body: JSON.stringify({ pointKeys }),
+  }),
+  unmanageDevicePoint: (deviceId, pointId) => request(`/devices/managed/${deviceId}/points/${pointId}`, {
+    method: 'DELETE',
   }),
   clearManagedDevicePoints: (id) => request(`/devices/managed/${id}/points`, { method: 'DELETE' }),
   updateManagedPoint: (deviceId, pointId, data) => request(`/devices/managed/${deviceId}/points/${pointId}`, {

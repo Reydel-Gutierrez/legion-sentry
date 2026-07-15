@@ -6,9 +6,9 @@ const POLL_GROUPS = Object.freeze({
 });
 
 const POLL_INTERVAL_MS = Object.freeze({
-  fast: 10000,
-  normal: 60000,
-  slow: 300000,
+  fast: 5000,
+  normal: 15000,
+  slow: 60000,
   manual: null,
 });
 

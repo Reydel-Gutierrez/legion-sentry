@@ -1,8 +1,12 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { dataFilePath, ensureDataDir, REPO_DATA_DIR } = require('../../lib/dataPaths');
 
-const AUTH_PATH = path.join(__dirname, '../../data/auth.json');
+function getAuthPath() {
+  return dataFilePath('auth.json');
+}
+
 const DEFAULT_USERNAME = 'Legion';
 const DEFAULT_PASSWORD = 'Welcome21Legion!';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -10,9 +14,13 @@ const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const sessions = new Map();
 
 function ensureAuthDir() {
-  const dir = path.dirname(AUTH_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+  ensureDataDir();
+  const AUTH_PATH = getAuthPath();
+  if (!fs.existsSync(AUTH_PATH)) {
+    const seed = path.join(REPO_DATA_DIR, 'auth.json');
+    if (fs.existsSync(seed) && path.resolve(seed) !== path.resolve(AUTH_PATH)) {
+      fs.copyFileSync(seed, AUTH_PATH);
+    }
   }
 }
 
@@ -35,6 +43,7 @@ function verifyPassword(password, record) {
 
 function loadAuthConfig() {
   ensureAuthDir();
+  const AUTH_PATH = getAuthPath();
   if (!fs.existsSync(AUTH_PATH)) {
     const now = new Date().toISOString();
     const { passwordHash, salt } = createPasswordRecord(DEFAULT_PASSWORD);
@@ -57,7 +66,7 @@ function loadAuthConfig() {
 function saveAuthConfig(config) {
   ensureAuthDir();
   config.updatedAt = new Date().toISOString();
-  fs.writeFileSync(AUTH_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8');
+  fs.writeFileSync(getAuthPath(), `${JSON.stringify(config, null, 2)}\n`, 'utf8');
   return config;
 }
 
@@ -168,7 +177,7 @@ function logout(token) {
 }
 
 module.exports = {
-  AUTH_PATH,
+  get AUTH_PATH() { return getAuthPath(); },
   SESSION_COOKIE: 'sentry_session',
   SESSION_TTL_MS,
   loadAuthConfig,

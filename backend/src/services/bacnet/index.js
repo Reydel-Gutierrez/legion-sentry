@@ -4,15 +4,21 @@ const { loadSettings, updateSection } = require('../../lib/settingsStore');
 const { DEVICE_STATES } = require('../../lib/deviceStates');
 const serialService = require('../interfaces/serial.service');
 const bacnetMstpService = require('./bacnetMstp.service');
+const { dataFilePath, ensureDataDir, REPO_DATA_DIR, atomicWriteJson } = require('../../lib/dataPaths');
 
-const BACNET_PATH = path.join(__dirname, '../../data/bacnet.json');
+function getBacnetPath() {
+  return dataFilePath('bacnet.json');
+}
 
 function ensureBacnetFile() {
-  const dir = path.dirname(BACNET_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  ensureDataDir();
+  const BACNET_PATH = getBacnetPath();
   if (!fs.existsSync(BACNET_PATH)) {
+    const seed = path.join(REPO_DATA_DIR, 'bacnet.json');
+    if (fs.existsSync(seed) && path.resolve(seed) !== path.resolve(BACNET_PATH)) {
+      fs.copyFileSync(seed, BACNET_PATH);
+      return;
+    }
     const settings = loadSettings().bacnet || {};
     const initial = {
       mstp: settings.mstp || {
@@ -30,13 +36,13 @@ function ensureBacnetFile() {
       },
       updatedAt: new Date().toISOString(),
     };
-    fs.writeFileSync(BACNET_PATH, `${JSON.stringify(initial, null, 2)}\n`, 'utf8');
+    atomicWriteJson(BACNET_PATH, initial, { backup: false });
   }
 }
 
 function loadBacnetConfig() {
   ensureBacnetFile();
-  const raw = fs.readFileSync(BACNET_PATH, 'utf8');
+  const raw = fs.readFileSync(getBacnetPath(), 'utf8');
   return JSON.parse(raw);
 }
 
@@ -61,7 +67,7 @@ function saveMstpSettings(mstpPatch) {
   delete patch.extraFecRetryEnabled;
   current.mstp = sanitizeMstpConfig({ ...current.mstp, ...patch });
   current.updatedAt = new Date().toISOString();
-  fs.writeFileSync(BACNET_PATH, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
+  atomicWriteJson(getBacnetPath(), current, { backup: true });
   return current;
 }
 
@@ -133,7 +139,7 @@ function saveBacnetSettings(payload) {
 }
 
 module.exports = {
-  BACNET_PATH,
+  get BACNET_PATH() { return getBacnetPath(); },
   getBacnetStatus,
   saveBacnetSettings,
   loadBacnetConfig,

@@ -1,0 +1,28 @@
+[Unit]
+Description=Legion Sentry G1 BAS Appliance
+Documentation=https://github.com/Reydel-Gutierrez/legion-sentry
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=legion
+Group=legion
+WorkingDirectory=/opt/legion-sentry
+Environment=NODE_ENV=production
+Environment=PORT=3001
+Environment=LEGION_SENTRY_DATA_DIR=/var/lib/legion-sentry
+Environment=LEGION_SENTRY_AUTO_START_MSTP=1
+Environment=LEGION_SENTRY_SHUTDOWN_TIMEOUT_MS=20000
+ExecStart=/usr/bin/node backend/src/server.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=25
+KillMode=mixed
+KillSignal=SIGTERM
+
+# RS-485 / serial access typically requires dialout
+SupplementaryGroups=dialout
+
+[Install]
+WantedBy=multi-user.target

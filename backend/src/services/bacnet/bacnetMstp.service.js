@@ -13,7 +13,9 @@ const {
 } = require('./mstpCrc');
 const { MstpTokenEngine, isValidMstpActivityFrame, PARTICIPATION_MODE } = require('./mstpTokenEngine');
 const bacnetApdu = require('./bacnetApduCodec');
-const { buildRuntimeSnapshot, RUNTIME_STATE } = require('./mstpRuntimeState');
+const { buildRuntimeSnapshot, RUNTIME_STATE, createRuntimeMachine } = require('./mstpRuntimeState');
+const { createLifecycleController } = require('./mstpRuntimeLifecycle');
+const { dataFilePath } = require('../../lib/dataPaths');
 
 const MSTP_FRAME_TYPE = {
   TOKEN: 0x00,
@@ -27,7 +29,9 @@ const MSTP_FRAME_TYPE = {
 };
 
 const MSTP_BROADCAST_MAC = 0xff;
-const BACNET_CONFIG_PATH = path.join(__dirname, '../../data/bacnet.json');
+function getBacnetConfigPath() {
+  return dataFilePath('bacnet.json');
+}
 const MAX_LOG_ENTRIES = 500;
 const MAX_FRAME_DATA_LEN = 501;
 const MAX_FRAME_DIAGNOSTICS = 300;
@@ -134,6 +138,10 @@ let activeDiscovery = null;
 let activePointDiscovery = null;
 let activeFieldRead = null;
 
+const lifecycle = createLifecycleController({
+  log: (level, message, extra = {}) => addDiscoveryLog(level, message, extra),
+});
+
 const DEFAULT_POINT_REQUEST_TIMEOUT_MS = 4000;
 const DEFAULT_POINT_MAX_RETRIES = 2;
 const DEFAULT_POINT_SESSION_TIMEOUT_MS = 120000;
@@ -173,8 +181,8 @@ function readExtendedDiscoveryRetriesEnabled(settings = {}) {
 function loadPersistedMstpSettings() {
   const fromSettings = loadSettings().bacnet?.mstp || {};
   try {
-    if (fs.existsSync(BACNET_CONFIG_PATH)) {
-      const raw = JSON.parse(fs.readFileSync(BACNET_CONFIG_PATH, 'utf8'));
+    if (fs.existsSync(getBacnetConfigPath())) {
+      const raw = JSON.parse(fs.readFileSync(getBacnetConfigPath(), 'utf8'));
       return { ...fromSettings, ...(raw.mstp || {}) };
     }
   } catch {
@@ -310,8 +318,19 @@ function getStatusSnapshot() {
   const defaults = getDefaultConfig();
   const tokenEngine = activeDiscovery?.tokenEngine?.getSnapshot()
     || activePointDiscovery?.tokenEngine?.getSnapshot()
+    || activeFieldRead?.tokenEngine?.getSnapshot()
     || null;
-  const runtime = buildRuntimeSnapshot({
+  const tokenStatus = tokenEngine?.state
+    || (lifecycle.isPersistent() && interfaceState.open ? 'participating' : (interfaceState.open ? 'listening' : 'idle'));
+  let queueDepth = 0;
+  try {
+    // eslint-disable-next-line global-require
+    queueDepth = require('../execution/fieldExecutionEngine').countQueuedJobs();
+  } catch {
+    queueDepth = 0;
+  }
+
+  const runtime = lifecycle.buildSnapshot({
     open: interfaceState.open,
     port: interfaceState.port ?? defaults.port,
     baudRate: interfaceState.baudRate ?? defaults.baudRate,
@@ -322,10 +341,16 @@ function getStatusSnapshot() {
     discoveryInProgress: Boolean(activeDiscovery),
     pointDiscoveryInProgress: Boolean(activePointDiscovery),
     fieldReadInProgress: Boolean(activeFieldRead),
+    tokenStatus,
+    queueDepth,
+    lastSuccessfulFrameAt: busAliveCache.lastValidFrameAt
+      ? new Date(busAliveCache.lastValidFrameAt).toISOString()
+      : null,
   });
   return {
     runtimeState: runtime.state,
     runtime,
+    runtimeGeneration: runtime.runtimeGeneration,
     open: interfaceState.open,
     port: interfaceState.port ?? defaults.port,
     baudRate: interfaceState.baudRate ?? defaults.baudRate,
@@ -539,8 +564,11 @@ function attachPortErrorHandler(port) {
 
 function scheduleInterfaceFaultCleanup() {
   setImmediate(() => {
-    closeInterfaceInternal('Serial port fault')
-      .catch((err) => addDiscoveryLog('error', `Fault cleanup failed: ${err.message}`));
+    if (lifecycle.isShuttingDown()) return;
+    interfaceState.open = false;
+    recoverRuntime('serial_port_fault').catch((err) => {
+      addDiscoveryLog('error', `Fault recovery failed: ${err.message}`);
+    });
   });
 }
 
@@ -922,13 +950,44 @@ function openSerialPort(config) {
 }
 
 async function openInterface(input = {}) {
+  if (lifecycle.isShuttingDown()) {
+    const error = new Error('Runtime is shutting down');
+    error.statusCode = 503;
+    error.code = 'RUNTIME_STOPPING';
+    throw error;
+  }
+
   if (interfaceState.open) {
+    lifecycle.setPersistent(true);
+    if (lifecycle.machine.getState() === RUNTIME_STATE.STOPPED
+      || lifecycle.machine.getState() === RUNTIME_STATE.FAULTED
+      || lifecycle.machine.getState() === RUNTIME_STATE.RECOVERING) {
+      lifecycle.machine.transitionTo(RUNTIME_STATE.STARTING, 'open_already_open');
+      lifecycle.machine.transitionTo(RUNTIME_STATE.ACTIVE, 'open_already_open');
+    }
     addDiscoveryLog('info', 'MS/TP interface already open');
     return {
       success: true,
       message: 'MS/TP interface already open',
       status: getStatusSnapshot(),
     };
+  }
+
+  const fromStopped = lifecycle.machine.getState() === RUNTIME_STATE.STOPPED
+    || lifecycle.machine.getState() === RUNTIME_STATE.FAULTED
+    || lifecycle.machine.getState() === RUNTIME_STATE.RECOVERING;
+  if (fromStopped) {
+    lifecycle.bumpGeneration('start_from_stopped');
+    const startTransition = lifecycle.machine.transitionTo(RUNTIME_STATE.STARTING, 'openInterface');
+    if (!startTransition.ok && !startTransition.noop) {
+      // Force through recover→starting if needed
+      if (lifecycle.machine.getState() === RUNTIME_STATE.FAULTED) {
+        lifecycle.machine.transitionTo(RUNTIME_STATE.RECOVERING, 'openInterface_from_faulted');
+        lifecycle.machine.transitionTo(RUNTIME_STATE.STARTING, 'openInterface');
+      }
+    }
+  } else {
+    lifecycle.machine.transitionTo(RUNTIME_STATE.STARTING, 'openInterface_reopen');
   }
 
   ensureSerialMonitorNotRunning();
@@ -939,6 +998,7 @@ async function openInterface(input = {}) {
   } catch (err) {
     interfaceState.lastError = err.message;
     addDiscoveryLog('error', `Serial configure failed: ${err.message}`);
+    lifecycle.machine.transitionTo(RUNTIME_STATE.FAULTED, 'serial_configure_failed');
     throw err;
   }
 
@@ -948,6 +1008,7 @@ async function openInterface(input = {}) {
   } catch (err) {
     interfaceState.lastError = err.message;
     addDiscoveryLog('error', `MS/TP interface open failed: ${err.message}`);
+    lifecycle.machine.transitionTo(RUNTIME_STATE.FAULTED, 'serial_open_failed');
     throw err;
   }
 
@@ -969,8 +1030,14 @@ async function openInterface(input = {}) {
   interfaceState.lastError = null;
   interfaceState.openedAt = new Date().toISOString();
 
+  lifecycle.setPersistent(true);
+  lifecycle.markRecoverySuccess();
+  lifecycle.machine.transitionTo(RUNTIME_STATE.LISTENING, 'serial_open');
+  lifecycle.machine.transitionTo(RUNTIME_STATE.JOINING, 'token_ring_probe');
+  lifecycle.machine.transitionTo(RUNTIME_STATE.ACTIVE, 'runtime_ready');
+
   registerProcessCleanup();
-  addDiscoveryLog('info', `MS/TP interface opened on ${config.port} at ${config.baudRate} baud (MAC ${config.macAddress})`);
+  addDiscoveryLog('info', `MS/TP interface opened on ${config.port} at ${config.baudRate} baud (MAC ${config.macAddress}) gen=${lifecycle.machine.getRuntimeGeneration()}`);
 
   return {
     success: true,
@@ -1001,9 +1068,175 @@ async function closeInterfaceInternal(reason = null) {
   };
 }
 
-async function closeInterface() {
-  return closeInterfaceInternal();
+async function closeInterface(reason = 'explicit_close') {
+  lifecycle.setShuttingDown(false);
+  lifecycle.clearRecoveryTimer();
+  lifecycle.resetRecovery();
+
+  const state = lifecycle.machine.getState();
+  if (state !== RUNTIME_STATE.STOPPED && state !== RUNTIME_STATE.STOPPING) {
+    lifecycle.machine.transitionTo(RUNTIME_STATE.STOPPING, reason);
+  }
+
+  // Cancel background ops soft-stop; leave discovery to finish with cancel flags via engines
+  try {
+    // eslint-disable-next-line global-require
+    require('../execution/fieldExecutionEngine').cancelQueuedBackgroundJobs?.('runtime_stop');
+  } catch {
+    // optional
+  }
+
+  const result = await closeInterfaceInternal(reason);
+  lifecycle.setPersistent(false);
+  lifecycle.machine.transitionTo(RUNTIME_STATE.STOPPED, reason);
+  lifecycle.bumpGeneration('stop');
+  return result;
 }
+
+async function startRuntime(input = {}) {
+  const result = await openInterface(input);
+  return {
+    success: true,
+    message: 'MS/TP runtime started',
+    data: getRuntimeSnapshot(),
+    status: result.status,
+  };
+}
+
+async function stopRuntime(reason = 'explicit_stop') {
+  const result = await closeInterface(reason);
+  return {
+    success: true,
+    message: 'MS/TP runtime stopped',
+    data: getRuntimeSnapshot(),
+    status: result.status,
+  };
+}
+
+async function restartRuntime(reason = 'explicit_restart', input = {}) {
+  addDiscoveryLog('info', `MS/TP runtime restart requested — ${reason}`);
+  lifecycle.bumpGeneration(`restart:${reason}`);
+  try {
+    // eslint-disable-next-line global-require
+    const engine = require('../execution/fieldExecutionEngine');
+    engine.cancelQueuedBackgroundJobs?.('runtime_restart');
+  } catch {
+    // optional
+  }
+  if (lifecycle.machine.getState() !== RUNTIME_STATE.STOPPED) {
+    await closeInterface(`restart:${reason}`);
+  }
+  const result = await openInterface(input);
+  return {
+    success: true,
+    message: 'MS/TP runtime restarted',
+    data: getRuntimeSnapshot(),
+    status: result.status,
+  };
+}
+
+async function recoverRuntime(reason = 'manual_retry') {
+  if (lifecycle.recovery.inProgress && reason !== 'manual_retry') {
+    return {
+      success: true,
+      message: 'Recovery already in progress',
+      data: getRuntimeSnapshot(),
+    };
+  }
+
+  const began = lifecycle.beginRecovery(reason);
+  if (!began.started && reason !== 'manual_retry') {
+    return {
+      success: true,
+      message: began.reason === 'already_recovering' ? 'Recovery already in progress' : 'Runtime shutting down',
+      data: getRuntimeSnapshot(),
+    };
+  }
+
+  const run = async () => {
+    try {
+      await closeInterfaceInternal(`recovery:${reason}`);
+      lifecycle.setPersistent(false);
+      if (lifecycle.machine.getState() === RUNTIME_STATE.RECOVERING) {
+        // stay in recovering then start
+      } else {
+        lifecycle.machine.transitionTo(RUNTIME_STATE.RECOVERING, 'recover_reopen');
+      }
+      await openInterface(getDefaultConfig());
+      addDiscoveryLog('info', `MS/TP recovery succeeded after attempt ${lifecycle.recovery.attempt}`);
+      return true;
+    } catch (err) {
+      interfaceState.lastError = err.message;
+      addDiscoveryLog('error', `MS/TP recovery failed: ${err.message}`);
+      lifecycle.machine.transitionTo(RUNTIME_STATE.FAULTED, `recovery_failed:${err.message}`);
+      // schedule next attempt
+      const next = lifecycle.beginRecovery(`retry_after_failure:${err.message}`);
+      if (next.started) {
+        lifecycle.scheduleRecovery(() => recoverRuntime('auto_retry'));
+      }
+      return false;
+    } finally {
+      lifecycle.recovery.inProgress = false;
+    }
+  };
+
+  if (reason === 'manual_retry') {
+    lifecycle.clearRecoveryTimer();
+    lifecycle.recovery.nextRetryAt = new Date().toISOString();
+    await run();
+    return {
+      success: true,
+      message: 'Recovery attempt started',
+      data: getRuntimeSnapshot(),
+    };
+  }
+
+  lifecycle.scheduleRecovery(run);
+  return {
+    success: true,
+    message: 'Recovery scheduled',
+    data: getRuntimeSnapshot(),
+  };
+}
+
+function getRuntimeSnapshot() {
+  const snap = getStatusSnapshot();
+  return {
+    state: snap.runtime?.state || snap.runtimeState,
+    stateSince: snap.runtime?.stateSince || null,
+    runtimeGeneration: snap.runtimeGeneration ?? snap.runtime?.runtimeGeneration ?? 0,
+    serialPort: snap.port,
+    baudRate: snap.baudRate,
+    localMac: snap.macAddress,
+    networkNumber: snap.networkNumber,
+    tokenStatus: snap.runtime?.tokenStatus || null,
+    queueDepth: snap.runtime?.queueDepth ?? 0,
+    activeOperation: snap.runtime?.activeOperation || null,
+    lastSuccessfulFrameAt: snap.runtime?.lastSuccessfulFrameAt || snap.busAlive?.lastValidFrameAt || null,
+    lastError: snap.lastError,
+    recovery: snap.runtime?.recovery || { attempt: 0, nextRetryAt: null },
+    open: snap.open,
+  };
+}
+
+function getRuntimeGeneration() {
+  return lifecycle.machine.getRuntimeGeneration();
+}
+
+function markBusy(operation) {
+  const state = lifecycle.machine.getState();
+  if (state === RUNTIME_STATE.ACTIVE || state === RUNTIME_STATE.DEGRADED || state === RUNTIME_STATE.BUSY) {
+    lifecycle.machine.transitionTo(RUNTIME_STATE.BUSY, operation || 'field_operation');
+  }
+}
+
+function markIdleAfterOperation() {
+  const state = lifecycle.machine.getState();
+  if (state === RUNTIME_STATE.BUSY) {
+    lifecycle.machine.transitionTo(RUNTIME_STATE.ACTIVE, 'operation_complete');
+  }
+}
+
 
 function writeToPort(port, buffer) {
   return new Promise((resolve, reject) => {
@@ -1540,7 +1773,7 @@ async function discover(input = {}) {
 
     activeDiscovery = null;
 
-    if (openedForDiscovery) {
+    if (openedForDiscovery && !lifecycle.shouldKeepPortOpenAfterOperation()) {
       await closeInterfaceInternal('Discovery finished');
     }
   }
@@ -2030,7 +2263,7 @@ async function discoverPointsForDevice(options = {}) {
 
     activePointDiscovery = null;
 
-    if (openedForSession) {
+    if (openedForSession && !lifecycle.shouldKeepPortOpenAfterOperation()) {
       await closeInterfaceInternal('Point discovery finished');
     }
   }
@@ -2320,7 +2553,7 @@ async function readPropertyForDevice(options = {}) {
 
     activeFieldRead = null;
 
-    if (openedForSession) {
+    if (openedForSession && !lifecycle.shouldKeepPortOpenAfterOperation()) {
       await closeInterfaceInternal('Property read finished');
     }
   }
@@ -2339,6 +2572,14 @@ module.exports = {
   isMstpBusBusy,
   openInterface,
   closeInterface,
+  startRuntime,
+  stopRuntime,
+  restartRuntime,
+  recoverRuntime,
+  getRuntimeSnapshot,
+  getRuntimeGeneration,
+  markBusy,
+  markIdleAfterOperation,
   discover,
   discoverPointsForDevice,
   readPropertyForDevice,
@@ -2347,5 +2588,6 @@ module.exports = {
   parseMstpFrames,
   parseIAmApdu,
   RUNTIME_STATE,
+  lifecycle,
   MstpTokenEngine: require('./mstpTokenEngine').MstpTokenEngine,
 };

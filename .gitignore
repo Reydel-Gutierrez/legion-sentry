@@ -5,3 +5,14 @@ build/
 *.log
 .DS_Store
 Thumbs.db
+
+# Mutable appliance runtime data (never commit field credentials / live inventory)
+backend/src/data/*.json
+backend/src/data/*.jsonl
+backend/src/data/*.bak
+backend/src/data/backups/
+!backend/src/data/.gitkeep
+!backend/src/data/README.md
+
+# Local overrides
+*.local.json

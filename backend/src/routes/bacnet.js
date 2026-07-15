@@ -76,6 +76,58 @@ router.get('/mstp/status', (_req, res) => {
   res.json(bacnetMstpService.getStatus());
 });
 
+router.get('/mstp/runtime', (_req, res) => {
+  res.json({
+    success: true,
+    data: bacnetMstpService.getRuntimeSnapshot(),
+    requestId: _req.requestId,
+  });
+});
+
+router.post('/mstp/runtime/start', asyncHandler(async (req, res) => {
+  const result = await bacnetMstpService.startRuntime(req.body || {});
+  logger.info({
+    source: 'mstp-runtime',
+    event: 'runtime_start',
+    message: 'BACnet MS/TP runtime started',
+    requestId: req.requestId,
+  });
+  res.json({ success: true, data: result.data, requestId: req.requestId });
+}));
+
+router.post('/mstp/runtime/stop', asyncHandler(async (req, res) => {
+  const result = await bacnetMstpService.stopRuntime('api_stop');
+  logger.info({
+    source: 'mstp-runtime',
+    event: 'runtime_stop',
+    message: 'BACnet MS/TP runtime stopped',
+    requestId: req.requestId,
+  });
+  res.json({ success: true, data: result.data, requestId: req.requestId });
+}));
+
+router.post('/mstp/runtime/restart', asyncHandler(async (req, res) => {
+  const result = await bacnetMstpService.restartRuntime('api_restart', req.body || {});
+  logger.info({
+    source: 'mstp-runtime',
+    event: 'runtime_restart',
+    message: 'BACnet MS/TP runtime restarted',
+    requestId: req.requestId,
+  });
+  res.json({ success: true, data: result.data, requestId: req.requestId });
+}));
+
+router.post('/mstp/runtime/retry', asyncHandler(async (req, res) => {
+  const result = await bacnetMstpService.recoverRuntime('manual_retry');
+  logger.info({
+    source: 'mstp-runtime',
+    event: 'runtime_retry',
+    message: 'BACnet MS/TP runtime recovery requested',
+    requestId: req.requestId,
+  });
+  res.json({ success: true, data: result.data, requestId: req.requestId });
+}));
+
 router.post('/mstp/open', asyncHandler(async (req, res) => {
   const normalized = validateMstpDiscoverBody(req.body, req.requestId);
   const result = await bacnetMstpService.openInterface({ ...req.body, ...normalized });

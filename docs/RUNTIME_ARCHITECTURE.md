@@ -136,11 +136,15 @@ pointPollingEngine tick
 
 Paused / queued jobs cancelled during trunk discovery; resumes afterward. Does not create duplicate timers on resume.
 
-## 12. Shutdown and recovery
+## 12. Shutdown and recovery (Phase 2)
 
-- `bacnetMstp.service` registers process cleanup to close the SerialPort
-- Worker / poller timers are cleared on `stopWorker` / pause paths
-- Failed jobs do not retain exclusive locks after `finally`
+- Application `SIGTERM` / `SIGINT` handled in `server.js` (`gracefulShutdown`)
+- Stops pollers and worker, cancels background jobs, closes MS/TP runtime, closes HTTP
+- Serial faults enter `recovering` with bounded backoff (see `docs/PHASE_2_RUNTIME.md`)
+- `runtimeGeneration` discards stale async completions after restart
+- systemd unit template: `deploy/legion-sentry.service` (`TimeoutStopSec=25`)
+
+Mutable data lives in `LEGION_SENTRY_DATA_DIR` (production `/var/lib/legion-sentry`). See `docs/DATA_MIGRATION.md`.
 
 ## 13. Error propagation
 

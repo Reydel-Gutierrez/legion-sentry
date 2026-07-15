@@ -1,5 +1,6 @@
 const managed = require('./managed');
 const inventory = require('./inventory');
+const { applyHealthResult, DEVICE_HEALTH, createHealthFields } = require('../execution/deviceHealth');
 
 const MSTP_TRANSPORT = 'BACnet MS/TP';
 const MSTP_RECENT_WINDOW_MS = 2 * 60 * 1000;
@@ -52,10 +53,18 @@ function normalizeManagedDeviceForApi(device) {
     latestDiscoverySessionId: latestMstpDiscoverySessionId,
     lastDiscoverySessionId: device.discoverySessionId ?? null,
     missedScans: device.missedScans ?? 0,
-    deviceQuality: device.deviceQuality ?? 'unknown',
+    deviceQuality: device.deviceQuality ?? DEVICE_HEALTH.UNKNOWN,
     lastHeartbeatAt: device.lastHeartbeatAt ?? null,
-    heartbeatFailureCount: device.heartbeatFailureCount ?? 0,
+    heartbeatFailureCount: device.heartbeatFailureCount ?? device.consecutiveFailures ?? 0,
     lastHeartbeatError: device.lastHeartbeatError ?? null,
+    lastSeenAt: device.lastSeenAt ?? null,
+    lastSuccessfulReadAt: device.lastSuccessfulReadAt ?? null,
+    lastFailedReadAt: device.lastFailedReadAt ?? null,
+    consecutiveSuccesses: device.consecutiveSuccesses ?? 0,
+    consecutiveFailures: device.consecutiveFailures ?? 0,
+    responseTimeMs: device.responseTimeMs ?? null,
+    averageResponseTimeMs: device.averageResponseTimeMs ?? null,
+    healthChangedAt: device.healthChangedAt ?? null,
     ...pointSummary,
   };
 }
@@ -83,34 +92,36 @@ function lazyPointSummary(managedDeviceId) {
 }
 
 function qualityFromHeartbeatFailures(count) {
-  if (count >= 3) return 'offline';
-  if (count === 2) return 'stale';
-  if (count === 1) return 'degraded';
-  return 'online';
+  // Legacy helper — prefer applyHealthResult / deviceHealth state machine.
+  if (count >= 4) return DEVICE_HEALTH.OFFLINE;
+  if (count >= 2) return DEVICE_HEALTH.DEGRADED;
+  if (count === 1) return DEVICE_HEALTH.ONLINE;
+  return DEVICE_HEALTH.ONLINE;
 }
 
-function recordHeartbeatResult(managedDeviceId, { success, error }) {
+function recordHeartbeatResult(managedDeviceId, { success, error, errorCode, responseTimeMs }) {
   const managedList = managed.loadManaged();
   const index = managedList.findIndex((d) => d.id === managedDeviceId);
   if (index < 0) return null;
 
   const current = managedList[index];
-  const now = new Date().toISOString();
-  let heartbeatFailureCount = current.heartbeatFailureCount ?? 0;
-
-  if (success) {
-    heartbeatFailureCount = 0;
-  } else {
-    heartbeatFailureCount += 1;
+  if (current.enabled === false) {
+    const disabled = {
+      ...current,
+      deviceQuality: DEVICE_HEALTH.DISABLED,
+    };
+    managedList[index] = disabled;
+    managed.saveManaged(managedList);
+    return { success: true, device: normalizeManagedDeviceForApi(disabled) };
   }
 
-  const next = {
-    ...current,
-    lastHeartbeatAt: now,
-    heartbeatFailureCount,
-    deviceQuality: qualityFromHeartbeatFailures(heartbeatFailureCount),
-    lastHeartbeatError: success ? null : (error || 'Heartbeat failed'),
-  };
+  const next = applyHealthResult(current, {
+    success: Boolean(success),
+    error,
+    errorCode,
+    responseTimeMs,
+    enabled: current.enabled !== false,
+  });
 
   managedList[index] = next;
   managed.saveManaged(managedList);
@@ -303,6 +314,7 @@ function isDeviceManaged(deviceInstance, mstpMacAddress, transport = MSTP_TRANSP
 
 module.exports = {
   MSTP_TRANSPORT,
+  DEVICE_HEALTH,
   setLatestMstpDiscoverySessionId,
   getManagedDevices,
   getManagedDeviceById,
@@ -314,4 +326,6 @@ module.exports = {
   managedDeviceKey,
   normalizeManagedDeviceForApi,
   recordHeartbeatResult,
+  qualityFromHeartbeatFailures,
+  createHealthFields,
 };

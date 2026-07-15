@@ -2,8 +2,6 @@ const API_BASE = '/api';
 
 import { extractErrorMessage } from './parseApiError.js';
 
-const API_BASE = '/api';
-
 async function request(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: 'include',
@@ -105,6 +103,11 @@ export const api = {
     body: JSON.stringify({ timeoutMs }),
   }),
   getBacnetMstpStatus: () => request('/bacnet/mstp/status'),
+  getBacnetMstpRuntime: () => request('/bacnet/mstp/runtime'),
+  startBacnetMstpRuntime: (data) => request('/bacnet/mstp/runtime/start', { method: 'POST', body: JSON.stringify(data || {}) }),
+  stopBacnetMstpRuntime: () => request('/bacnet/mstp/runtime/stop', { method: 'POST' }),
+  restartBacnetMstpRuntime: (data) => request('/bacnet/mstp/runtime/restart', { method: 'POST', body: JSON.stringify(data || {}) }),
+  retryBacnetMstpRuntime: () => request('/bacnet/mstp/runtime/retry', { method: 'POST' }),
   openBacnetMstp: (data) => request('/bacnet/mstp/open', { method: 'POST', body: JSON.stringify(data || {}) }),
   closeBacnetMstp: () => request('/bacnet/mstp/close', { method: 'POST' }),
   discoverBacnetMstp: (data) => request('/bacnet/mstp/discover', { method: 'POST', body: JSON.stringify(data || {}) }),
@@ -112,6 +115,8 @@ export const api = {
   clearBacnetMstpLogs: () => request('/bacnet/mstp/clear-logs', { method: 'POST' }),
   getBacnetMstpFrames: () => request('/bacnet/mstp/frames'),
   clearBacnetMstpSession: () => request('/bacnet/mstp/clear-session', { method: 'POST' }),
+  getManagedDeviceHealth: (id) => request(`/devices/managed/${id}/health`),
+  readAllManagedPoints: (id) => request(`/devices/managed/${id}/read-all-managed`, { method: 'POST' }),
   readBacnetDevice: (address, deviceInstance) => request('/bacnet/ip/read-device', {
     method: 'POST',
     body: JSON.stringify({ address, deviceInstance }),

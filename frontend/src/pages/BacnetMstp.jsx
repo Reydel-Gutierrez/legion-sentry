@@ -529,6 +529,119 @@ export default function BacnetMstpPage() {
             open={openCards.advanced}
             onToggle={() => toggleCard('advanced')}
           >
+            <div className="form-section-title">Runtime</div>
+            <div className="mstp-status-grid mb-3">
+              <StatusItem label="State">
+                <StatusChip
+                  label={mstp?.runtimeState || mstp?.runtime?.state || (interfaceOpen ? 'active' : 'stopped')}
+                  tone={interfaceOpen ? 'success' : 'neutral'}
+                />
+              </StatusItem>
+              <StatusItem label="Serial Port">
+                <span className="mono">{mstp?.port || mstpForm.port}</span>
+              </StatusItem>
+              <StatusItem label="Baud">
+                <span>{mstp?.baudRate ?? mstpForm.baudRate}</span>
+              </StatusItem>
+              <StatusItem label="Local MAC">
+                <span className="mono">{mstp?.macAddress ?? mstpForm.macAddress}</span>
+              </StatusItem>
+              <StatusItem label="Network">
+                <span>{mstp?.networkNumber ?? mstpForm.networkNumber}</span>
+              </StatusItem>
+              <StatusItem label="Token / Bus">
+                <StatusChip tone={tokenStatus.tone} label={tokenStatus.label} />
+              </StatusItem>
+              <StatusItem label="Queue Depth">
+                <span>{mstp?.runtime?.queueDepth ?? 0}</span>
+              </StatusItem>
+              <StatusItem label="Last Frame">
+                <span>{formatTimeAgo(mstp?.runtime?.lastSuccessfulFrameAt || lastFrameAt)}</span>
+              </StatusItem>
+              <StatusItem label="Generation">
+                <span className="mono">{mstp?.runtimeGeneration ?? mstp?.runtime?.runtimeGeneration ?? 0}</span>
+              </StatusItem>
+              <StatusItem label="Recovery">
+                <span>
+                  {mstp?.runtime?.recovery?.attempt ?? 0}
+                  {mstp?.runtime?.recovery?.nextRetryAt
+                    ? ` · next ${formatTimeAgo(mstp.runtime.recovery.nextRetryAt)}`
+                    : ''}
+                </span>
+              </StatusItem>
+              <StatusItem label="Last Error">
+                <span className="text-danger" style={{ fontSize: '0.85rem' }}>
+                  {mstp?.lastError || '—'}
+                </span>
+              </StatusItem>
+            </div>
+            <div className="d-flex flex-wrap gap-2 mb-3">
+              <ActionButton
+                size="sm"
+                variant="primary"
+                disabled={loading || interfaceOpen}
+                onClick={async () => {
+                  setLoading(true);
+                  setMessage(null);
+                  try {
+                    await api.startBacnetMstpRuntime(buildDiscoverPayload(mstpForm));
+                    await load();
+                    setMessage({ type: 'success', text: 'MS/TP runtime started.' });
+                  } catch (err) {
+                    setMessage({ type: 'error', text: err.message });
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              >
+                Start Runtime
+              </ActionButton>
+              <ActionButton
+                size="sm"
+                disabled={loading || !interfaceOpen}
+                onClick={handleCloseMstp}
+              >
+                Stop Runtime
+              </ActionButton>
+              <ActionButton
+                size="sm"
+                disabled={loading}
+                onClick={async () => {
+                  setLoading(true);
+                  setMessage(null);
+                  try {
+                    await api.restartBacnetMstpRuntime(buildDiscoverPayload(mstpForm));
+                    await load();
+                    setMessage({ type: 'success', text: 'MS/TP runtime restarted.' });
+                  } catch (err) {
+                    setMessage({ type: 'error', text: err.message });
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              >
+                Restart
+              </ActionButton>
+              <ActionButton
+                size="sm"
+                disabled={loading}
+                onClick={async () => {
+                  setLoading(true);
+                  setMessage(null);
+                  try {
+                    await api.retryBacnetMstpRuntime();
+                    await load();
+                    setMessage({ type: 'success', text: 'Recovery retry requested.' });
+                  } catch (err) {
+                    setMessage({ type: 'error', text: err.message });
+                  } finally {
+                    setLoading(false);
+                  }
+                }}
+              >
+                Retry Now
+              </ActionButton>
+            </div>
             <div className="form-section-title">Status</div>
             <div className="mstp-status-grid mb-3">
               <StatusItem label="Interface">

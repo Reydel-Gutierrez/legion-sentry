@@ -12,6 +12,8 @@
     "test": "npm run test:backend && npm run test:frontend",
     "test:backend": "npm run test --prefix backend",
     "test:frontend": "npm run test --prefix frontend",
+    "test:endurance:sim": "npm run test:endurance:sim --prefix backend",
+    "migrate:data": "npm run migrate:data --prefix backend",
     "lint": "npm run lint --prefix backend && npm run lint --prefix frontend"
   },
   "devDependencies": {

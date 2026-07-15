@@ -80,6 +80,32 @@ router.get('/managed/:id', asyncHandler(async (req, res) => {
   res.json(device);
 }));
 
+router.get('/managed/:id/health', asyncHandler(async (req, res) => {
+  const id = asId(req.params.id, 'id', req.requestId);
+  const result = managedDevices.getManagedDeviceById(id);
+  if (!result) throw new NotFoundError('Managed device not found', { managedDeviceId: id }, req.requestId);
+  const d = result.device;
+  res.json({
+    success: true,
+    data: {
+      id: d.id,
+      deviceQuality: d.deviceQuality,
+      lastSeenAt: d.lastSeenAt,
+      lastSuccessfulReadAt: d.lastSuccessfulReadAt,
+      lastFailedReadAt: d.lastFailedReadAt,
+      consecutiveSuccesses: d.consecutiveSuccesses,
+      consecutiveFailures: d.consecutiveFailures,
+      responseTimeMs: d.responseTimeMs,
+      averageResponseTimeMs: d.averageResponseTimeMs,
+      lastErrorCode: d.lastErrorCode || null,
+      lastErrorMessage: d.lastHeartbeatError || d.lastErrorMessage || null,
+      healthChangedAt: d.healthChangedAt,
+      enabled: d.enabled,
+    },
+    requestId: req.requestId,
+  });
+}));
+
 router.get('/managed/:id/points', asyncHandler(async (req, res) => {
   const id = asId(req.params.id, 'id', req.requestId);
   const device = managedDevices.getManagedDeviceById(id);
@@ -210,6 +236,24 @@ router.post('/managed/:deviceId/points/:pointId/refresh', asyncHandler(async (re
   const runAsync = req.body?.async === true;
   const result = await managedPoints.refreshPoint(deviceId, pointId, { async: runAsync });
   res.json(result);
+}));
+
+router.post('/managed/:id/read-all-managed', asyncHandler(async (req, res) => {
+  const id = asId(req.params.id, 'id', req.requestId);
+  const device = managedDevices.getManagedDeviceById(id);
+  if (!device) throw new NotFoundError('Managed device not found', { managedDeviceId: id }, req.requestId);
+  const listed = managedPoints.listPointsByManagedDeviceId(id);
+  const jobs = [];
+  for (const point of listed.points || []) {
+    // eslint-disable-next-line no-await-in-loop
+    const job = await managedPoints.refreshPoint(id, point.id, { async: true });
+    jobs.push(job);
+  }
+  res.json({
+    success: true,
+    data: { submitted: jobs.length, jobs },
+    requestId: req.requestId,
+  });
 }));
 
 router.post('/clear', (_req, res) => {

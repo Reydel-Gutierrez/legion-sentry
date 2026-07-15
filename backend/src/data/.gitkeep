@@ -1,0 +1,3 @@
+# Placeholder so the development data directory exists in a fresh clone.
+# Production appliances store mutable data in LEGION_SENTRY_DATA_DIR
+# (default /var/lib/legion-sentry). See docs/DATA_MIGRATION.md.

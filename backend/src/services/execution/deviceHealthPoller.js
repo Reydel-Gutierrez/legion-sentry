@@ -12,9 +12,10 @@ const HEARTBEAT_PROPERTY_FALLBACK = BACNET_PROPERTIES.objectName;
 const DEVICE_QUALITY = Object.freeze({
   ONLINE: 'online',
   DEGRADED: 'degraded',
-  STALE: 'stale',
+  STALE: 'degraded',
   OFFLINE: 'offline',
   UNKNOWN: 'unknown',
+  DISABLED: 'disabled',
 });
 
 let heartbeatTimer = null;
@@ -45,16 +46,31 @@ function isDeviceDue(deviceId) {
   return Date.now() >= dueAt;
 }
 
-function scheduleNextHeartbeat(deviceId, intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS) {
-  nextHeartbeatAt.set(deviceId, Date.now() + intervalMs);
+function scheduleNextHeartbeat(deviceId, intervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS, withJitter = false) {
+  const jitter = withJitter ? Math.floor(Math.random() * Math.min(intervalMs * 0.25, 5000)) : 0;
+  const stagger = (hashString(deviceId) % Math.min(intervalMs, 10000));
+  nextHeartbeatAt.set(deviceId, Date.now() + intervalMs + jitter + stagger);
 }
 
-function recordHeartbeatSuccess(managedDeviceId) {
-  const result = managedDevices.recordHeartbeatResult(managedDeviceId, { success: true });
+function hashString(value) {
+  const str = String(value || '');
+  let hash = 0;
+  for (let i = 0; i < str.length; i += 1) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function recordHeartbeatSuccess(managedDeviceId, meta = {}) {
+  const result = managedDevices.recordHeartbeatResult(managedDeviceId, {
+    success: true,
+    responseTimeMs: meta.responseTimeMs,
+  });
   if (result?.device) {
     pointCache.refreshQualitiesForDevice(managedDeviceId, result.device.deviceQuality);
   }
-  scheduleNextHeartbeat(managedDeviceId);
+  scheduleNextHeartbeat(managedDeviceId, DEFAULT_HEARTBEAT_INTERVAL_MS, true);
   return result;
 }
 
@@ -70,7 +86,7 @@ function recordHeartbeatFailure(managedDeviceId, errorMessage) {
   if (result?.device) {
     pointCache.refreshQualitiesForDevice(managedDeviceId, result.device.deviceQuality);
   }
-  scheduleNextHeartbeat(managedDeviceId);
+  scheduleNextHeartbeat(managedDeviceId, DEFAULT_HEARTBEAT_INTERVAL_MS, true);
   return result;
 }
 
@@ -160,7 +176,7 @@ function resume() {
 
 function getStatus() {
   const devices = getEnabledDevices();
-  const qualityCounts = { online: 0, degraded: 0, stale: 0, offline: 0, unknown: 0 };
+  const qualityCounts = { online: 0, degraded: 0, offline: 0, unknown: 0, disabled: 0 };
 
   for (const device of devices) {
     const q = device.deviceQuality || DEVICE_QUALITY.UNKNOWN;

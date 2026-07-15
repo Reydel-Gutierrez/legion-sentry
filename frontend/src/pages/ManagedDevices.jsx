@@ -29,6 +29,7 @@ const DEVICE_QUALITY_TONE = {
   stale: 'warn',
   offline: 'danger',
   unknown: 'neutral',
+  disabled: 'neutral',
 };
 
 function mstpStatusChip(device) {
@@ -130,8 +131,13 @@ export default function ManagedDevicesPage() {
     { key: 'mac', header: 'MS/TP MAC', cellClassName: 'mono', render: (d) => d.mstpMacAddress },
     { key: 'deviceInstance', header: 'Instance' },
     { key: 'objectName', header: 'Object Name', render: (d) => d.objectName || '—' },
-    { key: 'heartbeat', header: 'Last Heartbeat', render: (d) => formatLastSeen(d.lastHeartbeatAt) },
-    { key: 'hbFailures', header: 'HB Failures', render: (d) => d.heartbeatFailureCount ?? 0 },
+    { key: 'heartbeat', header: 'Last Seen', render: (d) => formatLastSeen(d.lastSeenAt || d.lastHeartbeatAt) },
+    {
+      key: 'response',
+      header: 'Response',
+      render: (d) => (d.responseTimeMs != null ? `${d.responseTimeMs} ms` : '—'),
+    },
+    { key: 'hbFailures', header: 'Failures', render: (d) => d.consecutiveFailures ?? d.heartbeatFailureCount ?? 0 },
     {
       key: 'discovered',
       header: 'Discovered',

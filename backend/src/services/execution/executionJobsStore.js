@@ -1,22 +1,23 @@
 const fs = require('fs');
-const path = require('path');
+const { atomicWriteJson } = require('../../lib/atomicWrite');
+const { dataFilePath, ensureDataDir } = require('../../lib/dataPaths');
 
-const JOBS_PATH = path.join(__dirname, '../../data/executionJobs.json');
+function getJobsPath() {
+  return dataFilePath('executionJobs.json');
+}
 
 function ensureJobsFile() {
-  const dir = path.dirname(JOBS_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  ensureDataDir();
+  const JOBS_PATH = getJobsPath();
   if (!fs.existsSync(JOBS_PATH)) {
-    fs.writeFileSync(JOBS_PATH, '[]', 'utf8');
+    atomicWriteJson(JOBS_PATH, [], { backup: false });
   }
 }
 
 function loadJobs() {
   ensureJobsFile();
   try {
-    const raw = fs.readFileSync(JOBS_PATH, 'utf8');
+    const raw = fs.readFileSync(getJobsPath(), 'utf8');
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -26,7 +27,7 @@ function loadJobs() {
 
 function saveJobs(jobs) {
   ensureJobsFile();
-  fs.writeFileSync(JOBS_PATH, `${JSON.stringify(jobs, null, 2)}\n`, 'utf8');
+  atomicWriteJson(getJobsPath(), jobs, { backup: true });
 }
 
 let idCounter = 0;
@@ -37,7 +38,7 @@ function generateJobId() {
 }
 
 module.exports = {
-  JOBS_PATH,
+  get JOBS_PATH() { return getJobsPath(); },
   loadJobs,
   saveJobs,
   generateJobId,

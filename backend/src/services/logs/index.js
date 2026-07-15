@@ -1,7 +1,10 @@
 const fs = require('fs');
-const path = require('path');
+const { dataFilePath, ensureDataDir } = require('../../lib/dataPaths');
 
-const LOGS_PATH = path.join(__dirname, '../../data/logs.jsonl');
+function getLogsPath() {
+  return dataFilePath('logs.jsonl');
+}
+
 const LOG_LEVELS = ['info', 'warn', 'error', 'debug'];
 const SERVICES = ['system', 'network', 'bacnet', 'modbus', 'mqtt', 'fault', 'interfaces', 'auth'];
 
@@ -10,10 +13,8 @@ let nextId = 1;
 let loaded = false;
 
 function ensureLogsFile() {
-  const dir = path.dirname(LOGS_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  ensureDataDir();
+  const LOGS_PATH = getLogsPath();
   if (!fs.existsSync(LOGS_PATH)) {
     fs.writeFileSync(LOGS_PATH, '', 'utf8');
   }
@@ -25,7 +26,7 @@ function loadLogsFromDisk() {
   ensureLogsFile();
 
   try {
-    const raw = fs.readFileSync(LOGS_PATH, 'utf8');
+    const raw = fs.readFileSync(getLogsPath(), 'utf8');
     const lines = raw.split('\n').filter(Boolean);
     logs = lines.map((line) => {
       try {
@@ -45,7 +46,7 @@ function loadLogsFromDisk() {
 
 function appendLogToDisk(entry) {
   ensureLogsFile();
-  fs.appendFileSync(LOGS_PATH, `${JSON.stringify(entry)}\n`, 'utf8');
+  fs.appendFileSync(getLogsPath(), `${JSON.stringify(entry)}\n`, 'utf8');
 }
 
 function addLog({ level = 'info', service = 'system', message }) {
@@ -73,7 +74,7 @@ function getLogs(filter = 'all') {
 
 function clearLogs() {
   ensureLogsFile();
-  fs.writeFileSync(LOGS_PATH, '', 'utf8');
+  fs.writeFileSync(getLogsPath(), '', 'utf8');
   logs = [];
   nextId = 1;
   addLog({ level: 'info', service: 'system', message: 'Log buffer cleared' });
@@ -94,5 +95,5 @@ module.exports = {
   addLog,
   clearLogs,
   seedStartupLog,
-  LOGS_PATH,
+  get LOGS_PATH() { return getLogsPath(); },
 };

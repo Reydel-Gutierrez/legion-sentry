@@ -6,11 +6,10 @@
 
 Legion Sentry is a dedicated router/gateway appliance UI for the Legion Sentry DEV-1 (Raspberry Pi 4) development hardware. This is not the main Legion operator platform — it is a focused field technician admin interface.
 
-## Stack
+## Data
 
-- **Frontend:** React, React Router, React Bootstrap, SCSS (Vite)
-- **Backend:** Node.js, Express
-- **Data:** JSON config files on the appliance (`backend/src/data/`)
+- **Development:** JSON config under `backend/src/data/` (gitignored mutable files)
+- **Production:** `/var/lib/legion-sentry` via `LEGION_SENTRY_DATA_DIR` — see [docs/DATA_MIGRATION.md](docs/DATA_MIGRATION.md)
 
 ## Quick Start (Development)
 
@@ -40,19 +39,22 @@ Tests mock BACnet/serial hardware and run on a development PC (Node ≥ 16).
 
 ## Runtime architecture
 
-See **[docs/RUNTIME_ARCHITECTURE.md](docs/RUNTIME_ARCHITECTURE.md)** for:
+See **[docs/RUNTIME_ARCHITECTURE.md](docs/RUNTIME_ARCHITECTURE.md)** and **[docs/PHASE_2_RUNTIME.md](docs/PHASE_2_RUNTIME.md)** for:
 
 - Service ownership and BACnet/IP vs MS/TP boundaries
+- Persistent MS/TP runtime state machine and generation
 - Single MS/TP serial ownership (`bacnetMstp.service`)
 - Operation queue priorities (discovery / point discovery / heartbeat / polling)
-- Point-discovery API contract and error shapes
+- Point quality, device health, recovery, and graceful shutdown
 
-### Phase 1 limitations
+### Phase 2 limitations
 
-- Writes (`write_property` jobs) are not implemented yet
+- Not a BACnet/IP ↔ MS/TP router (Phase 3)
+- Writes (`write_property`) disabled by default (`WRITE_NOT_IMPLEMENTED`)
+- SubscribeCOV not safely supported on the current MS/TP path
 - Directed MS/TP Who-Is (unicast) is not fully supported without full token participation modes
 - Diagnostics serial monitor and BACnet MS/TP remain mutually exclusive on the same port
-- Automated UI e2e against live controllers still requires Raspberry Pi + RS-485 hardware
+- Hardware acceptance tests A–H must be run on Raspberry Pi + RS-485 (see `docs/HARDWARE_ACCEPTANCE_PHASE_2.md`)
 
 ### MS/TP serial ownership
 
@@ -67,36 +69,65 @@ Only `backend/src/services/bacnet/bacnetMstp.service.js` opens the BACnet RS-485
 
 ## Deployment to Raspberry Pi
 
-After pulling updates on the Pi:
+Preferred production mechanism is **systemd**, not `npm run dev`.
+
+1. Install / update the unit from the repository template:
 
 ```bash
+sudo cp deploy/legion-sentry.service /etc/systemd/system/legion-sentry.service
+# Edit WorkingDirectory / User to match the Pi install
+sudo mkdir -p /var/lib/legion-sentry
+sudo chown -R legion:legion /var/lib/legion-sentry
+sudo systemctl daemon-reload
+sudo systemctl enable --now legion-sentry
+```
+
+2. Migrate existing JSON data out of the Git tree (first time only):
+
+```bash
+export LEGION_SENTRY_DATA_DIR=/var/lib/legion-sentry
+npm run migrate:data -- --dry-run
+npm run migrate:data
+sudo systemctl restart legion-sentry
+```
+
+3. After code updates:
+
+```bash
+cd /opt/legion-sentry   # your clone path
 git pull
 npm install
 npm install --prefix backend
 npm install --prefix frontend
-npm run dev
+npm run build --prefix frontend   # if serving a built UI separately
+sudo systemctl restart legion-sentry
 ```
 
-When running on Raspberry Pi:
+Service status:
+
+```bash
+sudo systemctl status legion-sentry
+journalctl -u legion-sentry -f
+```
+
+### Development on the Pi (optional)
 
 ```bash
 npm run dev
 ```
 
-Frontend will expose on:
-
-`http://<pi-ip>:5173`
-
-Do not rely on local-only localhost binding — the dev server binds to all interfaces (`0.0.0.0`) so other devices on the LAN can reach the UI.
+Frontend: `http://<pi-ip>:5173` · API: `http://<pi-ip>:3001`
 
 | Service | Default port | URL |
 |---------|--------------|-----|
-| Frontend (Vite) | 5173 | `http://<pi-ip>:5173` |
+| Frontend (Vite, dev) | 5173 | `http://<pi-ip>:5173` |
 | Backend API | 3001 | `http://<pi-ip>:3001` |
 
 **Notes:**
 - Default RS485 port on Pi: `/dev/serial0`
 - Serial console must be disabled for RS485 HAT use
+- Production data: `/var/lib/legion-sentry` (see [docs/DATA_MIGRATION.md](docs/DATA_MIGRATION.md))
+- Runtime docs: [docs/PHASE_2_RUNTIME.md](docs/PHASE_2_RUNTIME.md)
 - On first boot, default login is created automatically (see Authentication)
 
 ## Authentication
@@ -108,7 +139,7 @@ Local appliance login only — not cloud user management.
 | Username | `Legion` |
 | Password | `Welcome21Legion!` |
 
-Credentials are stored hashed in `backend/src/data/auth.json`. Change the default password under **System → Change Password** before field deployment.
+Credentials are stored hashed under the data directory (`auth.json`). Change the default password under **System → Change Password** before field deployment.
 
 | Method | Path | Description |
 |--------|------|-------------|

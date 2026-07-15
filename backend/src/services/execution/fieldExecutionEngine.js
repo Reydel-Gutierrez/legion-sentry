@@ -42,8 +42,9 @@ const WORKER_INTERVAL_MS = 100;
 const JOB_WAIT_POLL_MS = 250;
 const MAX_JOBS_RETAINED = 500;
 const MAX_POLLING_JOBS_RETAINED = 100;
-const JOB_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const JOB_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const POLLING_JOB_MAX_AGE_MS = 60 * 60 * 1000;
+const FAILED_JOB_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const QUEUE_WARN_THRESHOLD = 50;
 const GLOBAL_QUEUE_LIMIT = 50;
 const ACTIVE_JOB_WAIT_MS = 30000;
@@ -81,8 +82,10 @@ function trimJobs(jobs) {
   const recentTerminal = terminal.filter((job) => {
     const stamp = job.completedAt || job.cancelledAt || job.createdAt;
     if (!stamp) return true;
-    const maxAge = job.source === 'polling' ? POLLING_JOB_MAX_AGE_MS : JOB_MAX_AGE_MS;
-    return now - new Date(stamp).getTime() < maxAge;
+    const age = now - new Date(stamp).getTime();
+    if (job.source === 'polling') return age < POLLING_JOB_MAX_AGE_MS;
+    if (job.status === JOB_STATUS.FAILED) return age < FAILED_JOB_MAX_AGE_MS;
+    return age < JOB_MAX_AGE_MS;
   });
 
   let combined = [...active, ...recentTerminal];
@@ -304,6 +307,26 @@ function shouldCancelJob(id) {
   return Boolean(cancelFlags.get(id));
 }
 
+function getCurrentRuntimeGeneration() {
+  try {
+    return bacnetMstpService.getRuntimeGeneration?.() ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+function isStaleGeneration(job) {
+  if (job.runtimeGeneration == null) return false;
+  return job.runtimeGeneration !== getCurrentRuntimeGeneration();
+}
+
+function discardStaleJobResult(job, outcome) {
+  console.warn(
+    `[field-execution] Discarding stale ${outcome} for job ${job.id} `
+    + `(job gen=${job.runtimeGeneration}, runtime gen=${getCurrentRuntimeGeneration()})`,
+  );
+}
+
 function createJob(payload = {}) {
   const {
     type,
@@ -323,9 +346,9 @@ function createJob(payload = {}) {
   }
 
   if (type === JOB_TYPES.WRITE_PROPERTY) {
-    const error = new Error('write_property jobs are not implemented yet');
+    const error = new Error('WriteProperty is not implemented');
     error.statusCode = 501;
-    error.code = 'NOT_IMPLEMENTED';
+    error.code = 'WRITE_NOT_IMPLEMENTED';
     throw error;
   }
 
@@ -334,6 +357,20 @@ function createJob(payload = {}) {
     error.statusCode = 409;
     error.code = 'BUS_PAUSED_DISCOVERY';
     throw error;
+  }
+
+  // Do not accept background work while runtime is stopped/faulted/recovering
+  try {
+    const runtime = bacnetMstpService.getRuntimeSnapshot?.();
+    const state = runtime?.state;
+    if (BACKGROUND_SOURCES.has(source) && state && !['active', 'busy', 'listening', 'joining', 'degraded'].includes(state)) {
+      const error = new Error(`Background job deferred — runtime state is ${state}`);
+      error.statusCode = 409;
+      error.code = 'RUNTIME_NOT_READY';
+      throw error;
+    }
+  } catch (err) {
+    if (err.code === 'RUNTIME_NOT_READY') throw err;
   }
 
   const now = new Date().toISOString();
@@ -353,6 +390,7 @@ function createJob(payload = {}) {
     attempts: 0,
     maxRetries,
     timeoutMs,
+    runtimeGeneration: getCurrentRuntimeGeneration(),
     createdAt: now,
     startedAt: null,
     completedAt: null,
@@ -538,9 +576,27 @@ function getDeviceQuality(managedDeviceId) {
   return device?.deviceQuality || 'unknown';
 }
 
+function cancelQueuedBackgroundJobs(reason = 'background_cancel') {
+  const polling = cancelQueuedPollingJobs();
+  const health = cancelQueuedDeviceHealthJobs();
+  return {
+    cancelled: polling.cancelled + health.cancelled,
+    polling: polling.cancelled,
+    health: health.cancelled,
+    reason,
+  };
+}
+
 function applyReadResult(job, result) {
+  if (isStaleGeneration(job)) {
+    discardStaleJobResult(job, 'success');
+    return;
+  }
+
   if (job.source === 'device-health' && job.managedDeviceId) {
-    lazyDeviceHealthPoller().recordHeartbeatSuccess(job.managedDeviceId);
+    lazyDeviceHealthPoller().recordHeartbeatSuccess(job.managedDeviceId, {
+      responseTimeMs: result?.durationMs,
+    });
     return;
   }
 
@@ -551,11 +607,17 @@ function applyReadResult(job, result) {
     lazyPointCache().applyReadSuccess(job.managedPointId, result.value, {
       deviceQuality,
       scheduleNext: job.source === 'polling',
+      rawValue: result.raw,
     });
   }
 }
 
 function applyReadFailure(job, errorMessage) {
+  if (isStaleGeneration(job)) {
+    discardStaleJobResult(job, 'failure');
+    return;
+  }
+
   if (mstpBusCoordinator.isDiscoveryActive()) {
     return;
   }
@@ -942,6 +1004,26 @@ function submitReadProperty(payload = {}) {
   });
 }
 
+function submitWriteProperty(payload = {}) {
+  return createJob({
+    type: JOB_TYPES.WRITE_PROPERTY,
+    source: payload.source || 'ui',
+    priority: payload.priority,
+    managedDeviceId: payload.managedDeviceId,
+    managedPointId: payload.managedPointId || null,
+    request: {
+      managedDeviceId: payload.managedDeviceId,
+      objectType: payload.objectType,
+      objectInstance: payload.objectInstance,
+      propertyIdentifier: payload.propertyIdentifier,
+      value: payload.value,
+      priority: payload.priority,
+    },
+    maxRetries: payload.maxRetries ?? 0,
+    timeoutMs: payload.timeoutMs || DEFAULT_POINT_TIMEOUT_MS,
+  });
+}
+
 module.exports = {
   JOB_TYPES,
   JOB_STATUS,
@@ -952,6 +1034,7 @@ module.exports = {
   cancelQueuedJobs,
   cancelQueuedPollingJobs,
   cancelQueuedDeviceHealthJobs,
+  cancelQueuedBackgroundJobs,
   clearCompletedJobs,
   clearFailedJobs,
   getExecutionStatus,
@@ -963,9 +1046,16 @@ module.exports = {
   resumeFromDiscovery,
   discoverPointsForManagedDevice,
   submitReadProperty,
+  submitWriteProperty,
   hasPendingJobForPoint,
   hasPendingJobForDevice,
   hasPendingPointDiscovery,
   countPollingPendingJobs,
+  countQueuedJobs,
   isQueueFull,
+  isStaleGeneration,
+  getCurrentRuntimeGeneration,
+  trimJobs,
+  MAX_JOBS_RETAINED,
+  JOB_MAX_AGE_MS,
 };

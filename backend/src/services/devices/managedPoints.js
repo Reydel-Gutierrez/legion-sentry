@@ -22,11 +22,10 @@ function getManagedPointKeys(managedDeviceId) {
 
 function normalizePointForApi(point) {
   const device = managedDevices.getManagedDeviceById(point.managedDeviceId)?.device;
-  const quality = pointCache.derivePointQuality(point, device?.deviceQuality);
+  const enriched = pointCache.enrichPointForApi(point, device?.deviceQuality);
   return {
-    ...sanitizePointTextFields(point),
+    ...sanitizePointTextFields(enriched),
     status: formatStatusFlags(point.statusFlags),
-    quality,
     pollIntervalMs: getPollIntervalMs(point.pollGroup, point.pollIntervalMs),
   };
 }

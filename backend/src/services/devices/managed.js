@@ -1,14 +1,14 @@
 const fs = require('fs');
-const path = require('path');
 const { atomicWriteJson } = require('../../lib/atomicWrite');
+const { dataFilePath, ensureDataDir } = require('../../lib/dataPaths');
 
-const MANAGED_PATH = path.join(__dirname, '../../data/managedDevices.json');
+function getManagedPath() {
+  return dataFilePath('managedDevices.json');
+}
 
 function ensureManagedFile() {
-  const dir = path.dirname(MANAGED_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  ensureDataDir();
+  const MANAGED_PATH = getManagedPath();
   if (!fs.existsSync(MANAGED_PATH)) {
     atomicWriteJson(MANAGED_PATH, [], { backup: false });
   }
@@ -17,7 +17,7 @@ function ensureManagedFile() {
 function loadManaged() {
   ensureManagedFile();
   try {
-    const raw = fs.readFileSync(MANAGED_PATH, 'utf8');
+    const raw = fs.readFileSync(getManagedPath(), 'utf8');
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -27,7 +27,7 @@ function loadManaged() {
 
 function saveManaged(devices) {
   ensureManagedFile();
-  atomicWriteJson(MANAGED_PATH, devices, { backup: true });
+  atomicWriteJson(getManagedPath(), devices, { backup: true });
 }
 
 function generateManagedId(deviceInstance, mstpMacAddress) {
@@ -36,7 +36,7 @@ function generateManagedId(deviceInstance, mstpMacAddress) {
 }
 
 module.exports = {
-  MANAGED_PATH,
+  get MANAGED_PATH() { return getManagedPath(); },
   loadManaged,
   saveManaged,
   generateManagedId,

@@ -1,14 +1,14 @@
 const fs = require('fs');
-const path = require('path');
 const { atomicWriteJson } = require('../../lib/atomicWrite');
+const { dataFilePath, ensureDataDir } = require('../../lib/dataPaths');
 
-const DISCOVERED_PATH = path.join(__dirname, '../../data/discoveredPoints.json');
+function getDiscoveredPath() {
+  return dataFilePath('discoveredPoints.json');
+}
 
 function ensureFile() {
-  const dir = path.dirname(DISCOVERED_PATH);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+  ensureDataDir();
+  const DISCOVERED_PATH = getDiscoveredPath();
   if (!fs.existsSync(DISCOVERED_PATH)) {
     atomicWriteJson(DISCOVERED_PATH, [], { backup: false });
   }
@@ -17,7 +17,7 @@ function ensureFile() {
 function loadRecords() {
   ensureFile();
   try {
-    const raw = fs.readFileSync(DISCOVERED_PATH, 'utf8');
+    const raw = fs.readFileSync(getDiscoveredPath(), 'utf8');
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -27,7 +27,7 @@ function loadRecords() {
 
 function saveRecords(records) {
   ensureFile();
-  atomicWriteJson(DISCOVERED_PATH, records, { backup: true });
+  atomicWriteJson(getDiscoveredPath(), records, { backup: true });
 }
 
 function getRecordForDevice(managedDeviceId) {
@@ -58,7 +58,7 @@ function countForDevice(managedDeviceId) {
 }
 
 module.exports = {
-  DISCOVERED_PATH,
+  get DISCOVERED_PATH() { return getDiscoveredPath(); },
   loadRecords,
   saveRecords,
   getRecordForDevice,

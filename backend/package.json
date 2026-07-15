@@ -8,7 +8,9 @@
     "dev": "node src/server.js",
     "start": "node src/server.js",
     "test": "node test/run.js",
-    "lint": "node --check src/app.js && node --check src/server.js && node --check src/services/devices/pointDiscovery.js && node --check src/routes/devices.js && node --check src/middleware/errorHandler.js"
+    "test:endurance:sim": "node scripts/endurance-sim.js",
+    "migrate:data": "node scripts/migrate-data.js",
+    "lint": "node --check src/app.js && node --check src/server.js && node --check src/services/devices/pointDiscovery.js && node --check src/routes/devices.js && node --check src/middleware/errorHandler.js && node --check src/services/bacnet/mstpRuntimeState.js && node --check src/lib/dataPaths.js"
   },
   "engines": {
     "node": ">=16.0.0"

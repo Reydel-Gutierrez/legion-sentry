@@ -9,13 +9,17 @@ import ProgressBar from '../common/ProgressBar';
 const POLL_GROUPS = ['fast', 'normal', 'slow', 'manual'];
 
 const POINT_QUALITY_TONE = {
+  good: 'success',
   online: 'success',
   stale: 'warn',
+  uncertain: 'warn',
   offline: 'danger',
   offline_by_device: 'danger',
   stale_by_device: 'warn',
+  fault: 'danger',
   unknown: 'neutral',
   error: 'danger',
+  disabled: 'neutral',
 };
 
 function formatLastSeen(iso) {
@@ -394,7 +398,16 @@ export default function DevicePointsModal({
       key: 'presentValue',
       header: 'Present Value',
       cellClassName: 'mono',
-      render: (p) => formatPresentValue(p.presentValue),
+      render: (p) => {
+        const stale = p.quality === 'stale' || p.isRetainedStale;
+        return (
+          <span title={stale ? 'Retained last-known value (stale)' : undefined}>
+            {formatPresentValue(p.presentValue ?? p.lastKnownValue)}
+            {p.units ? ` ${p.units}` : ''}
+            {stale ? ' · retained' : ''}
+          </span>
+        );
+      },
     },
     {
       key: 'quality',
@@ -407,7 +420,7 @@ export default function DevicePointsModal({
         />
       ),
     },
-    { key: 'lastReadAt', header: 'Last Read', render: (p) => formatLastSeen(p.lastReadAt) },
+    { key: 'lastReadAt', header: 'Last Update', render: (p) => formatLastSeen(p.lastSuccessfulReadAt || p.lastReadAt) },
     { key: 'nextPollAt', header: 'Next Poll', render: (p) => formatLastSeen(p.nextPollAt) },
     { key: 'failureCount', header: 'Failures', render: (p) => p.failureCount ?? 0 },
     {

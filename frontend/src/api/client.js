@@ -108,6 +108,7 @@ export const api = {
   stopBacnetMstpRuntime: () => request('/bacnet/mstp/runtime/stop', { method: 'POST' }),
   restartBacnetMstpRuntime: (data) => request('/bacnet/mstp/runtime/restart', { method: 'POST', body: JSON.stringify(data || {}) }),
   retryBacnetMstpRuntime: () => request('/bacnet/mstp/runtime/retry', { method: 'POST' }),
+  exportBacnetMstpDiagnostics: () => request('/bacnet/mstp/diagnostics/export'),
   openBacnetMstp: (data) => request('/bacnet/mstp/open', { method: 'POST', body: JSON.stringify(data || {}) }),
   closeBacnetMstp: () => request('/bacnet/mstp/close', { method: 'POST' }),
   discoverBacnetMstp: (data) => request('/bacnet/mstp/discover', { method: 'POST', body: JSON.stringify(data || {}) }),

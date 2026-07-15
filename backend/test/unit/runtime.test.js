@@ -24,7 +24,13 @@ test('runtime snapshot reports serial owner', () => {
     pointDiscoveryInProgress: true,
   });
   assert.strictEqual(snap.state, RUNTIME_STATE.BUSY);
-  assert.strictEqual(snap.serialOwner, 'bacnetMstp.service');
+  assert.strictEqual(snap.serialOwner, 'none');
+  const owned = buildRuntimeSnapshot({
+    open: true,
+    port: '/dev/serial0',
+    serialOwner: 'bacnet-mstp',
+  });
+  assert.strictEqual(owned.serialOwner, 'bacnet-mstp');
   assert.strictEqual(snap.activeOperation, 'point_discovery');
 });
 

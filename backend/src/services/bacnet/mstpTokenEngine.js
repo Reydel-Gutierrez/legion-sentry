@@ -690,6 +690,20 @@ class MstpTokenEngine {
       reason,
     });
   }
+
+  /**
+   * Clear queued frames and disable further participation.
+   * Timers/listeners are owned by the runtime, not the engine instance.
+   */
+  destroy(reason = 'destroyed') {
+    this.bacnetFrameQueue.length = 0;
+    this.pendingPassToken = false;
+    this.pendingPollForMaster = false;
+    this.waitingForPfmReply = false;
+    this.holdingToken = false;
+    this.transmitEnabled = false;
+    this.onLog('info', `Token engine destroyed — ${reason}`);
+  }
 }
 
 module.exports = {

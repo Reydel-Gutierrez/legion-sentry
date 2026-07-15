@@ -57,6 +57,15 @@ sudo systemctl daemon-reload
 sudo systemctl restart legion-sentry
 ```
 
+## Retention
+
+| Store | Policy |
+|-------|--------|
+| `logs.jsonl` | Rotate by size (~2 MB); keep numbered retain files (default 5) |
+| `executionJobs.json` | Trim active + limited completed/failed history; no `.bak` on every write |
+| Sibling `.bak` | Single overwrite backup for atomic JSON writes of durable config |
+| `backups/pre-migration-*` | Pruned after migration (default keep 3) |
+
 ## Development
 
 Unset `LEGION_SENTRY_DATA_DIR` and run with `NODE_ENV` not equal to `production`. Data resolves to `backend/src/data`. Mutable `*.json` / `*.jsonl` under that folder are gitignored.

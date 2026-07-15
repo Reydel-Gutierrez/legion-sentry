@@ -122,10 +122,13 @@ function tick() {
 
     const device = deviceMap.get(point.managedDeviceId);
     const nowIso = new Date().toISOString();
+    const intervalMs = getPollIntervalMs(point.pollGroup);
+    // Advance nextPollAt on enqueue so missed intervals are not replayed in a burst.
+    const nextPollAt = new Date(Date.now() + intervalMs).toISOString();
     const points = pointsStore.loadPoints();
     const idx = points.findIndex((p) => p.id === point.id);
     if (idx >= 0) {
-      points[idx] = { ...points[idx], lastPollAt: nowIso };
+      points[idx] = { ...points[idx], lastPollAt: nowIso, nextPollAt };
       pointsStore.savePoints(points);
     }
 
@@ -142,7 +145,7 @@ function tick() {
       });
       submitted += 1;
     } catch (err) {
-      if (err.code === 'BUS_PAUSED_DISCOVERY') {
+      if (err.code === 'BUS_PAUSED_DISCOVERY' || err.code === 'QUEUE_FULL' || err.code === 'RUNTIME_NOT_READY') {
         break;
       }
       throw err;

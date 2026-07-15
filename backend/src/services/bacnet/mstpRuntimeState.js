@@ -28,12 +28,14 @@ const ALLOWED_TRANSITIONS = Object.freeze({
   [RUNTIME_STATE.LISTENING]: [
     RUNTIME_STATE.JOINING,
     RUNTIME_STATE.ACTIVE,
+    RUNTIME_STATE.BUSY,
     RUNTIME_STATE.DEGRADED,
     RUNTIME_STATE.RECOVERING,
     RUNTIME_STATE.STOPPING,
   ],
   [RUNTIME_STATE.JOINING]: [
     RUNTIME_STATE.ACTIVE,
+    RUNTIME_STATE.BUSY,
     RUNTIME_STATE.DEGRADED,
     RUNTIME_STATE.RECOVERING,
     RUNTIME_STATE.FAULTED,
@@ -283,7 +285,7 @@ function buildRuntimeSnapshot(parts = {}) {
       attempt: parts.recoveryAttempt ?? 0,
       nextRetryAt: parts.nextRetryAt || null,
     },
-    serialOwner: 'bacnetMstp.service',
+    serialOwner: parts.serialOwner || 'none',
     openedAt: parts.openedAt || null,
   };
 }

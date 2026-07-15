@@ -1,6 +1,6 @@
-# Legion Sentry Runtime Architecture (Phase 1)
+# Legion Sentry Runtime Architecture
 
-This document describes how Legion Sentry owns BACnet runtimes, serial access, jobs, and API error flow after Phase 1 stabilization.
+This document describes how Legion Sentry owns BACnet runtimes, serial access, jobs, and API error flow through **Phase 2.5**. For the Phase 2.5 completion checklist see [PHASE_2_5_RUNTIME_COMPLETION.md](./PHASE_2_5_RUNTIME_COMPLETION.md).
 
 ## 1. Application startup sequence
 
@@ -10,6 +10,7 @@ server.js
   → authService.loadAuthConfig()
   → logsService.seedStartupLog()
   → fieldExecutionEngine.startWorker()   // 100ms tick
+  → optional bacnetMstpService.startRuntime()  // persistent port + token engine
   → pointPollingEngine.start()           // 1s tick
   → deviceHealthPoller.start()           // 5s tick
   → listen(PORT)
@@ -21,7 +22,8 @@ Background engines submit work into the field execution queue. They do **not** o
 
 | Service | Owns | Must not |
 |---------|------|----------|
-| `bacnetMstp.service` (MS/TP runtime) | SerialPort for BACnet, token engine, frame RX/TX, exclusive discovery/read sessions | Be opened by routes other than runtime API |
+| `bacnetMstp.service` (MS/TP runtime) | SerialPort for BACnet, **persistent** token engine, frame RX/TX, runtime generation | Be opened by routes other than runtime API |
+| `serialOwnership` | Process-local owner: `none` / `bacnet-mstp` / `diagnostics` | Be bypassed by direct `SerialPort` opens |
 | `serial.service` | Diagnostics monitor / open-check only | Run concurrently with MS/TP BACnet sessions |
 | `mstpBusCoordinator` | Soft bus lock + pause/resume of polling/health during trunk discovery | Open serial ports |
 | `fieldExecutionEngine` | Job queue, priorities, worker serialization | Call `managedPoints.runPointDiscovery` |
@@ -44,18 +46,22 @@ Singletons are module-level by design for the appliance process. Circular requir
 ## 4. BACnet MS/TP runtime
 
 - Single owner: `backend/src/services/bacnet/bacnetMstp.service.js`
-- State snapshot includes authoritative `runtimeState`:
-  `stopped | starting | listening | joining | active | busy | degraded | faulted | stopping`
-- Derived helpers live in `mstpRuntimeState.js`
+- Authoritative machine states (`mstpRuntimeState.js`):
+  `stopped | starting | listening | joining | active | busy | degraded | recovering | faulted | stopping`
+- One **persistent token engine** per active runtime generation (Phase 2.5)
+- Field operations register frame handlers on the shared RX path; they never rebuild the engine
 
 ## 5. Serial ownership
 
 ```
-BACnet path:  bacnetMstp.service → SerialPort (/dev/serial0 by default)
-Diagnostics:  serial.service monitorState (mutually exclusive; MS/TP refuses if monitor running)
+serialOwnership registry (backend-enforced):
+  none | bacnet-mstp | diagnostics
+
+BACnet path:  acquire bacnet-mstp → bacnetMstp.service → SerialPort
+Diagnostics:  acquire diagnostics → serial.service monitor
 ```
 
-Routes never call `new SerialPort` directly. Configure-via-stty remains in `serial.service.configureSerial` and is invoked by the MS/TP runtime before open.
+Conflicts return HTTP 409 `SERIAL_OWNERSHIP_CONFLICT`. Routes never call `new SerialPort` for the BACnet port. Configure-via-stty remains in `serial.service.configureSerial` and is invoked by the MS/TP runtime before open.
 
 ## 6. Operation queue / scheduler
 
@@ -72,6 +78,8 @@ Priority (higher first) inside `fieldExecutionEngine`:
 Rules:
 
 - One field job executes at a time (`activeJobId`)
+- Queue depth is bounded; duplicate background reads/health checks coalesce
+- Expired polling jobs are discarded (missed intervals are not burst-replayed)
 - Trunk discovery pauses polling + health and cancels queued background jobs
 - Point discovery for the same managed device cannot start twice (`409 POINT_DISCOVERY_ALREADY_RUNNING`)
 - Locks / bus owners release in `finally`
@@ -206,30 +214,30 @@ On Windows / hosts without `/dev/serial0`:
 ## Mermaid overview
 
 ```mermaid
-flowchart TD
+flowchart TB
     UI[React UI]
     API[Express API]
-    MP[Managed Point / Point Discovery Service]
-    MD[Managed Device Service]
-    HB[Heartbeat Service]
-    POLL[Polling Service]
-    FE[Field Execution Engine]
-    COORD[MS/TP Bus Coordinator]
-    RT[MS/TP Runtime Service]
-    SERIAL[RS-485 Serial Port]
+    FE[fieldExecutionEngine]
+    RT[Persistent MS/TP runtime]
+    TE[Persistent token engine]
+    SERIAL[Serial port]
+    POLL[pointPollingEngine]
+    HEALTH[deviceHealthPoller]
+    DISC[Device discovery]
+    OWN[serialOwnership]
+    DIAG[diagnostics monitor]
 
     UI --> API
-    API --> MP
-    API --> MD
     API --> FE
-    MP --> FE
-    HB --> FE
-    POLL --> FE
-    FE --> COORD
     FE --> RT
-    COORD --> POLL
-    COORD --> HB
-    RT --> SERIAL
+    RT --> TE
+    TE --> SERIAL
+    POLL --> FE
+    HEALTH --> FE
+    DISC --> RT
+    OWN -.-> RT
+    OWN -.-> DIAG
+    DIAG --> SERIAL
 ```
 
 ## Reproducing point discovery

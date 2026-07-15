@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const { atomicWriteFile, atomicWriteJson } = require('./atomicWrite');
+const { pruneBackupDirectories, pruneSiblingBakFiles } = require('./fileRetention');
 
 const REPO_DATA_DIR = path.join(__dirname, '..', 'data');
 const PRODUCTION_DATA_DIR = '/var/lib/legion-sentry';
@@ -144,6 +145,15 @@ function migrateDataDirectory({
   if (fs.existsSync(srcBackups) && !dryRun) {
     const destBackups = path.join(targetDir, 'backups');
     fs.mkdirSync(destBackups, { recursive: true });
+  }
+
+  if (!dryRun) {
+    try {
+      pruneBackupDirectories(path.join(targetDir, 'backups'));
+      pruneSiblingBakFiles(targetDir);
+    } catch {
+      // retention is best-effort
+    }
   }
 
   return result;

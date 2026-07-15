@@ -3,6 +3,7 @@ const path = require('path');
 const os = require('os');
 const { execSync } = require('child_process');
 const { SerialPort } = require('serialport');
+const serialOwnership = require('./serialOwnership');
 
 const ALLOWED_PATHS = ['/dev/serial0', '/dev/ttyAMA0', '/dev/ttyS0', '/dev/ttyUSB0'];
 const ALLOWED_BAUD_RATES = [9600, 19200, 38400, 57600, 76800, 115200];
@@ -205,6 +206,7 @@ function getSerialDetail() {
     ports,
     defaultPort: getDefaultPort(),
     monitor: getMonitorStatus(),
+    serialOwnership: serialOwnership.getOwner(),
     lastOpenCheck,
     lastConfigure,
     scannedAt: new Date().toISOString(),
@@ -378,6 +380,7 @@ function getMonitorStatus() {
     lastActivityAt: monitorState.lastActivityAt,
     lastError: monitorState.lastError,
     startedAt: monitorState.startedAt,
+    serialOwner: serialOwnership.getOwner().owner,
   };
 }
 
@@ -389,6 +392,10 @@ async function stopMonitorInternal() {
   monitorState.running = false;
 
   if (!port) {
+    serialOwnership.release(serialOwnership.SERIAL_OWNER.DIAGNOSTICS, {
+      force: true,
+      reason: 'monitor_already_stopped',
+    });
     return previousStatus;
   }
 
@@ -404,6 +411,10 @@ async function stopMonitorInternal() {
     // ignore listener cleanup failures
   }
 
+  serialOwnership.release(serialOwnership.SERIAL_OWNER.DIAGNOSTICS, {
+    force: true,
+    reason: 'monitor_stopped',
+  });
   logSerial('serial monitor stopped');
   return getMonitorStatus();
 }
@@ -421,8 +432,27 @@ function startSerialMonitor({ path: devicePath, baudRate }) {
     );
   }
 
+  try {
+    serialOwnership.assertCanAcquire(serialOwnership.SERIAL_OWNER.DIAGNOSTICS);
+  } catch (err) {
+    throw createSerialError(
+      err.message || 'Serial port is owned by BACnet MS/TP',
+      409,
+      'SERIAL_OWNERSHIP_CONFLICT',
+    );
+  }
+
   validatePath(devicePath);
   const rate = validateBaudRate(baudRate);
+
+  serialOwnership.acquire(serialOwnership.SERIAL_OWNER.DIAGNOSTICS, {
+    portPath: devicePath,
+    reason: 'diagnostics_monitor_start',
+    onTimeout: () => {
+      logSerial('diagnostics serial ownership timed out — stopping monitor', 'warn');
+      stopSerialMonitor().catch(() => {});
+    },
+  });
 
   return new Promise((resolve, reject) => {
     let port = null;
@@ -431,6 +461,10 @@ function startSerialMonitor({ path: devicePath, baudRate }) {
       await detachAndDestroyPort(port);
       port = null;
       resetMonitorState();
+      serialOwnership.release(serialOwnership.SERIAL_OWNER.DIAGNOSTICS, {
+        force: true,
+        reason: 'monitor_open_failed',
+      });
       logSerial(`serial open failed: ${err?.message || String(err)}`, 'error');
       reject(createSerialError(err?.message || String(err), statusCode, code));
     };

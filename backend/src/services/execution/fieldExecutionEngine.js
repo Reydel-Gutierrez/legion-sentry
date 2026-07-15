@@ -48,12 +48,21 @@ const FAILED_JOB_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const QUEUE_WARN_THRESHOLD = 50;
 const GLOBAL_QUEUE_LIMIT = 50;
 const ACTIVE_JOB_WAIT_MS = 30000;
+const MAX_FAILED_JOBS_RETAINED = 50;
+const MAX_COMPLETED_JOBS_RETAINED = 100;
+const POLLING_JOB_MAX_QUEUE_AGE_MS = 60 * 1000;
 
 let activeJobId = null;
 let workerTimer = null;
 let workerRunning = false;
 let executionPaused = false;
 const cancelFlags = new Map();
+const queueStats = {
+  dropped: 0,
+  coalesced: 0,
+  failed: 0,
+  expiredDiscarded: 0,
+};
 
 function lazyPointPollingEngine() {
   // eslint-disable-next-line global-require
@@ -92,19 +101,21 @@ function trimJobs(jobs) {
   combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const pollingTerminal = combined.filter((job) => job.source === 'polling' && isTerminalStatus(job.status));
-  const nonPolling = combined.filter((job) => job.source !== 'polling' || !isTerminalStatus(job.status));
-  const keptPolling = pollingTerminal.slice(0, MAX_POLLING_JOBS_RETAINED);
-  const pollingIds = new Set(keptPolling.map((j) => j.id));
-  combined = [
-    ...nonPolling,
-    ...keptPolling,
-  ].filter((job, _i, arr) => {
-    if (job.source === 'polling' && isTerminalStatus(job.status) && !pollingIds.has(job.id)) {
-      return false;
-    }
+  const failedTerminal = combined.filter((job) => job.status === JOB_STATUS.FAILED);
+  const completedTerminal = combined.filter((job) => job.status === JOB_STATUS.COMPLETED && job.source !== 'polling');
+  const other = combined.filter((job) => {
+    if (!isTerminalStatus(job.status)) return true;
+    if (job.source === 'polling' && isTerminalStatus(job.status)) return false;
+    if (job.status === JOB_STATUS.FAILED) return false;
+    if (job.status === JOB_STATUS.COMPLETED && job.source !== 'polling') return false;
     return true;
   });
 
+  const keptPolling = pollingTerminal.slice(0, MAX_POLLING_JOBS_RETAINED);
+  const keptFailed = failedTerminal.slice(0, MAX_FAILED_JOBS_RETAINED);
+  const keptCompleted = completedTerminal.slice(0, MAX_COMPLETED_JOBS_RETAINED);
+
+  combined = [...other, ...keptPolling, ...keptFailed, ...keptCompleted];
   combined.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   if (combined.length > MAX_JOBS_RETAINED) {
@@ -327,6 +338,20 @@ function discardStaleJobResult(job, outcome) {
   );
 }
 
+function findCoalescableJob({ type, source, managedPointId, managedDeviceId }) {
+  const jobs = jobsStore.loadJobs();
+  return jobs.find((job) => {
+    if (job.status !== JOB_STATUS.QUEUED) return false;
+    if (job.type !== type || job.source !== source) return false;
+    if (managedPointId && job.managedPointId === managedPointId) return true;
+    if (!managedPointId && managedDeviceId && job.managedDeviceId === managedDeviceId
+      && source === 'device-health') {
+      return true;
+    }
+    return false;
+  }) || null;
+}
+
 function createJob(payload = {}) {
   const {
     type,
@@ -353,6 +378,7 @@ function createJob(payload = {}) {
   }
 
   if (BACKGROUND_SOURCES.has(source) && isExecutionPaused()) {
+    queueStats.dropped += 1;
     const error = new Error('Background job deferred — MS/TP bus paused for discovery');
     error.statusCode = 409;
     error.code = 'BUS_PAUSED_DISCOVERY';
@@ -364,6 +390,7 @@ function createJob(payload = {}) {
     const runtime = bacnetMstpService.getRuntimeSnapshot?.();
     const state = runtime?.state;
     if (BACKGROUND_SOURCES.has(source) && state && !['active', 'busy', 'listening', 'joining', 'degraded'].includes(state)) {
+      queueStats.dropped += 1;
       const error = new Error(`Background job deferred — runtime state is ${state}`);
       error.statusCode = 409;
       error.code = 'RUNTIME_NOT_READY';
@@ -371,6 +398,31 @@ function createJob(payload = {}) {
     }
   } catch (err) {
     if (err.code === 'RUNTIME_NOT_READY') throw err;
+  }
+
+  // Coalesce duplicate background reads / health checks
+  if (BACKGROUND_SOURCES.has(source)) {
+    const existing = findCoalescableJob({ type, source, managedPointId, managedDeviceId });
+    if (existing) {
+      queueStats.coalesced += 1;
+      return enrichJobForApi(existing);
+    }
+  }
+
+  if (BACKGROUND_SOURCES.has(source) && isQueueFull()) {
+    queueStats.dropped += 1;
+    const error = new Error('Execution queue is full — background job dropped');
+    error.statusCode = 429;
+    error.code = 'QUEUE_FULL';
+    throw error;
+  }
+
+  if (!BACKGROUND_SOURCES.has(source) && countQueuedJobs() >= GLOBAL_QUEUE_LIMIT * 2) {
+    queueStats.dropped += 1;
+    const error = new Error('Execution queue is full');
+    error.statusCode = 429;
+    error.code = 'QUEUE_FULL';
+    throw error;
   }
 
   const now = new Date().toISOString();
@@ -400,6 +452,43 @@ function createJob(payload = {}) {
   persistJob(job);
   scheduleWorker();
   return enrichJobForApi(job);
+}
+
+function getQueueSummary() {
+  const jobs = jobsStore.loadJobs();
+  const queued = jobs.filter((job) => job.status === JOB_STATUS.QUEUED);
+  const byType = {};
+  for (const job of queued) {
+    const key = `${job.source}:${job.type}`;
+    byType[key] = (byType[key] || 0) + 1;
+  }
+  const oldest = queued
+    .slice()
+    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())[0] || null;
+  const oldestAgeMs = oldest ? Math.max(0, Date.now() - new Date(oldest.createdAt).getTime()) : 0;
+  const activeJob = activeJobId ? getJobById(activeJobId) : null;
+
+  return {
+    activeOperation: activeJob
+      ? {
+        id: activeJob.id,
+        type: activeJob.type,
+        source: activeJob.source,
+        managedDeviceId: activeJob.managedDeviceId,
+        managedPointId: activeJob.managedPointId,
+        status: activeJob.status,
+      }
+      : null,
+    queueDepth: queued.length,
+    oldestJobAgeMs: oldestAgeMs,
+    oldestJobId: oldest?.id || null,
+    jobsByType: byType,
+    droppedJobs: queueStats.dropped,
+    coalescedJobs: queueStats.coalesced,
+    failedJobs: queueStats.failed,
+    expiredDiscarded: queueStats.expiredDiscarded,
+    globalLimit: GLOBAL_QUEUE_LIMIT,
+  };
 }
 
 function getJobs(filters = {}) {
@@ -824,11 +913,51 @@ async function processActiveJob(job) {
   }
 }
 
+function discardExpiredPollingJobs() {
+  const now = Date.now();
+  const jobs = jobsStore.loadJobs();
+  let discarded = 0;
+  for (const job of jobs) {
+    if (job.status !== JOB_STATUS.QUEUED) continue;
+    if (job.source !== 'polling') continue;
+    const age = now - new Date(job.createdAt).getTime();
+    if (age <= POLLING_JOB_MAX_QUEUE_AGE_MS) continue;
+    if (isStaleGeneration(job)) {
+      // also discard stale-generation queued polling
+    }
+    updateJob(job.id, {
+      status: JOB_STATUS.CANCELLED,
+      progressMessage: 'Expired polling interval discarded',
+      cancelledAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+    discarded += 1;
+  }
+  if (discarded > 0) {
+    queueStats.expiredDiscarded += discarded;
+  }
+  return discarded;
+}
+
 async function workerTick() {
   if (workerRunning || activeJobId) return;
   if (!mstpBusCoordinator.canStartExecutionJob()) return;
 
-  const next = sortQueuedJobs(jobsStore.loadJobs())[0];
+  discardExpiredPollingJobs();
+
+  const next = sortQueuedJobs(jobsStore.loadJobs()).find((job) => {
+    if (isStaleGeneration(job) && BACKGROUND_SOURCES.has(job.source)) {
+      updateJob(job.id, {
+        status: JOB_STATUS.CANCELLED,
+        progressMessage: 'Cancelled — stale runtime generation',
+        cancelledAt: new Date().toISOString(),
+        completedAt: new Date().toISOString(),
+      });
+      queueStats.expiredDiscarded += 1;
+      return false;
+    }
+    return true;
+  });
   if (!next) return;
 
   if (mstpBusCoordinator.isDiscoveryActive() && BACKGROUND_SOURCES.has(next.source)) {
@@ -853,6 +982,7 @@ async function workerTick() {
     } else {
       const current = readJobRecord(next.id);
       applyReadFailure(next, err.message || 'Job failed');
+      queueStats.failed += 1;
       updateJob(next.id, {
         status: JOB_STATUS.FAILED,
         error: err.message || 'Job failed',
@@ -1055,7 +1185,9 @@ module.exports = {
   isQueueFull,
   isStaleGeneration,
   getCurrentRuntimeGeneration,
+  getQueueSummary,
   trimJobs,
   MAX_JOBS_RETAINED,
   JOB_MAX_AGE_MS,
+  GLOBAL_QUEUE_LIMIT,
 };

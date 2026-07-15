@@ -71,8 +71,64 @@ test('runtime snapshot includes generation and recovery', () => {
   });
   assert.strictEqual(snap.state, RUNTIME_STATE.ACTIVE);
   assert.strictEqual(snap.runtimeGeneration, 1);
-  assert.strictEqual(snap.serialOwner, 'bacnetMstp.service');
+  assert.strictEqual(snap.serialOwner, 'none');
   assert.strictEqual(snap.recovery.attempt, 2);
+});
+
+test('serial ownership is mutually exclusive', () => {
+  const ownership = require('../../src/services/interfaces/serialOwnership');
+  ownership.resetForTests();
+  ownership.acquire(ownership.SERIAL_OWNER.BACNET_MSTP, { portPath: '/dev/serial0' });
+  assert.strictEqual(ownership.getOwner().owner, 'bacnet-mstp');
+  let conflicted = false;
+  try {
+    ownership.acquire(ownership.SERIAL_OWNER.DIAGNOSTICS, { portPath: '/dev/serial0' });
+  } catch (err) {
+    conflicted = err.code === 'SERIAL_OWNERSHIP_CONFLICT';
+  }
+  assert.strictEqual(conflicted, true);
+  ownership.release(ownership.SERIAL_OWNER.BACNET_MSTP);
+  ownership.acquire(ownership.SERIAL_OWNER.DIAGNOSTICS, { portPath: '/dev/serial0' });
+  assert.strictEqual(ownership.getOwner().owner, 'diagnostics');
+  ownership.resetForTests();
+});
+
+test('token engine destroy clears queue', () => {
+  const { MstpTokenEngine, PARTICIPATION_MODE } = require('../../src/services/bacnet/mstpTokenEngine');
+  const engine = new MstpTokenEngine({
+    macAddress: 3,
+    maxMaster: 127,
+    maxInfoFrames: 1,
+    baudRate: 38400,
+    participationMode: PARTICIPATION_MODE.LISTEN_ONLY,
+    buildFrame: () => Buffer.from([0x55, 0xff, 0x00, 0x01, 0x03, 0x00, 0x00, 0x00]),
+  });
+  engine.queueBacnetFrame(Buffer.from([1, 2, 3]), 'test');
+  assert.ok(engine.bacnetFrameQueue.length >= 1);
+  engine.destroy('unit_test');
+  assert.strictEqual(engine.bacnetFrameQueue.length, 0);
+  assert.strictEqual(engine.transmitEnabled, false);
+});
+
+test('queue summary exposes depth and counters', () => {
+  const summary = fieldExecutionEngine.getQueueSummary();
+  assert.ok(summary);
+  assert.ok(typeof summary.queueDepth === 'number');
+  assert.ok(typeof summary.droppedJobs === 'number');
+  assert.ok(typeof summary.coalescedJobs === 'number');
+});
+
+test('diagnostics export redacts secrets', () => {
+  const { redactObject } = require('../../src/services/system/diagnosticsExport');
+  const redacted = redactObject({
+    password: 'secret',
+    mqttPassword: 'x',
+    nested: { sessionSecret: 'y', host: 'ok' },
+  });
+  assert.strictEqual(redacted.password, '[REDACTED]');
+  assert.strictEqual(redacted.mqttPassword, '[REDACTED]');
+  assert.strictEqual(redacted.nested.sessionSecret, '[REDACTED]');
+  assert.strictEqual(redacted.nested.host, 'ok');
 });
 
 test('device health does not go offline after one failure', () => {

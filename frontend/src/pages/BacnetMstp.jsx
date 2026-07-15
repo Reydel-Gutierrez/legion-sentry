@@ -101,6 +101,7 @@ function ConfigCard({
 export default function BacnetMstpPage() {
   const navigate = useNavigate();
   const [mstpStatus, setMstpStatus] = useState(null);
+  const [runtimeDash, setRuntimeDash] = useState(null);
   const [devices, setDevices] = useState([]);
   const [logs, setLogs] = useState([]);
   const [frames, setFrames] = useState([]);
@@ -115,15 +116,17 @@ export default function BacnetMstpPage() {
   const toggleCard = (key) => setOpenCards((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const load = useCallback(async () => {
-    const [status, mstp, deviceData, managedData, logData, frameData] = await Promise.all([
+    const [status, mstp, runtime, deviceData, managedData, logData, frameData] = await Promise.all([
       api.getBacnetStatus(),
       api.getBacnetMstpStatus(),
+      api.getBacnetMstpRuntime().catch(() => ({ data: null })),
       api.getDevices(),
       api.getManagedDevices(),
       api.getBacnetMstpLogs(),
       api.getBacnetMstpFrames(),
     ]);
     setMstpStatus(mstp.status);
+    setRuntimeDash(runtime?.data || null);
     setDevices(deviceData.devices || []);
     setManagedKeys(new Set(
       (managedData.devices || []).map((d) => `${d.transport}:${d.mstpMacAddress}:${d.deviceInstance}`),
@@ -247,9 +250,31 @@ export default function BacnetMstpPage() {
     setLoading(true);
     setMessage(null);
     try {
-      const result = await api.closeBacnetMstp();
+      const result = await api.stopBacnetMstpRuntime();
       await load();
-      setMessage({ type: 'success', text: result.message });
+      setMessage({ type: 'success', text: result.message || 'MS/TP runtime stopped.' });
+    } catch (err) {
+      setMessage({ type: 'error', text: err.message });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleExportDiagnostics = async () => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const report = await api.exportBacnetMstpDiagnostics();
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `legion-sentry-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setMessage({ type: 'success', text: 'Diagnostics export downloaded (secrets redacted).' });
     } catch (err) {
       setMessage({ type: 'error', text: err.message });
     } finally {
@@ -529,52 +554,130 @@ export default function BacnetMstpPage() {
             open={openCards.advanced}
             onToggle={() => toggleCard('advanced')}
           >
-            <div className="form-section-title">Runtime</div>
-            <div className="mstp-status-grid mb-3">
-              <StatusItem label="State">
-                <StatusChip
-                  label={mstp?.runtimeState || mstp?.runtime?.state || (interfaceOpen ? 'active' : 'stopped')}
-                  tone={interfaceOpen ? 'success' : 'neutral'}
-                />
-              </StatusItem>
-              <StatusItem label="Serial Port">
-                <span className="mono">{mstp?.port || mstpForm.port}</span>
-              </StatusItem>
-              <StatusItem label="Baud">
-                <span>{mstp?.baudRate ?? mstpForm.baudRate}</span>
-              </StatusItem>
-              <StatusItem label="Local MAC">
-                <span className="mono">{mstp?.macAddress ?? mstpForm.macAddress}</span>
-              </StatusItem>
-              <StatusItem label="Network">
-                <span>{mstp?.networkNumber ?? mstpForm.networkNumber}</span>
-              </StatusItem>
-              <StatusItem label="Token / Bus">
-                <StatusChip tone={tokenStatus.tone} label={tokenStatus.label} />
-              </StatusItem>
-              <StatusItem label="Queue Depth">
-                <span>{mstp?.runtime?.queueDepth ?? 0}</span>
-              </StatusItem>
-              <StatusItem label="Last Frame">
-                <span>{formatTimeAgo(mstp?.runtime?.lastSuccessfulFrameAt || lastFrameAt)}</span>
-              </StatusItem>
-              <StatusItem label="Generation">
-                <span className="mono">{mstp?.runtimeGeneration ?? mstp?.runtime?.runtimeGeneration ?? 0}</span>
-              </StatusItem>
-              <StatusItem label="Recovery">
-                <span>
-                  {mstp?.runtime?.recovery?.attempt ?? 0}
-                  {mstp?.runtime?.recovery?.nextRetryAt
-                    ? ` · next ${formatTimeAgo(mstp.runtime.recovery.nextRetryAt)}`
-                    : ''}
-                </span>
-              </StatusItem>
-              <StatusItem label="Last Error">
-                <span className="text-danger" style={{ fontSize: '0.85rem' }}>
-                  {mstp?.lastError || '—'}
-                </span>
-              </StatusItem>
-            </div>
+            <div className="form-section-title">Runtime Dashboard</div>
+            {(() => {
+              const rt = runtimeDash || mstp?.runtime || {};
+              const stateLabel = rt.state || mstp?.runtimeState || (interfaceOpen ? 'active' : 'stopped');
+              const stateTone = ['active', 'busy', 'listening', 'joining'].includes(stateLabel)
+                ? 'success'
+                : stateLabel === 'degraded' || stateLabel === 'recovering'
+                  ? 'warning'
+                  : stateLabel === 'faulted'
+                    ? 'danger'
+                    : 'neutral';
+              const uptimeSec = rt.uptimeMs != null ? Math.floor(rt.uptimeMs / 1000) : null;
+              const q = rt.queue || rt.queueSummary || {};
+              const sup = rt.supervision || {};
+              const tok = rt.tokenEngine || mstp?.tokenEngine || null;
+              return (
+                <>
+                  <div className="mstp-status-grid mb-3">
+                    <StatusItem label="State">
+                      <StatusChip label={stateLabel} tone={stateTone} />
+                    </StatusItem>
+                    <StatusItem label="State Since">
+                      <span>{rt.stateSince ? formatTimeAgo(rt.stateSince) : '—'}</span>
+                    </StatusItem>
+                    <StatusItem label="Uptime">
+                      <span>{uptimeSec != null ? `${uptimeSec}s` : '—'}</span>
+                    </StatusItem>
+                    <StatusItem label="Generation">
+                      <span className="mono">{rt.runtimeGeneration ?? mstp?.runtimeGeneration ?? 0}</span>
+                    </StatusItem>
+                    <StatusItem label="Serial Port">
+                      <span className="mono">{rt.serialPort || mstp?.port || mstpForm.port}</span>
+                    </StatusItem>
+                    <StatusItem label="Baud">
+                      <span>{rt.baudRate ?? mstp?.baudRate ?? mstpForm.baudRate}</span>
+                    </StatusItem>
+                    <StatusItem label="Local MAC">
+                      <span className="mono">{rt.localMac ?? mstp?.macAddress ?? mstpForm.macAddress}</span>
+                    </StatusItem>
+                    <StatusItem label="Network">
+                      <span>{rt.networkNumber ?? mstp?.networkNumber ?? mstpForm.networkNumber}</span>
+                    </StatusItem>
+                    <StatusItem label="Token Engine">
+                      <StatusChip
+                        tone={tok ? 'success' : 'neutral'}
+                        label={tok?.participationStatus || rt.tokenStatus || tokenStatus.label}
+                      />
+                    </StatusItem>
+                    <StatusItem label="Serial Owner">
+                      <span className="mono">{rt.serialOwner || mstp?.serialOwnership?.owner || 'none'}</span>
+                    </StatusItem>
+                    <StatusItem label="Last RX Frame">
+                      <span>{formatTimeAgo(rt.lastRxFrameAt || rt.lastSuccessfulFrameAt || lastFrameAt)}</span>
+                    </StatusItem>
+                    <StatusItem label="Last TX Frame">
+                      <span>{formatTimeAgo(rt.lastTxFrameAt)}</span>
+                    </StatusItem>
+                    <StatusItem label="Active Operation">
+                      <span>{q.activeOperation?.type || rt.activeOperation || '—'}</span>
+                    </StatusItem>
+                    <StatusItem label="Queue Depth">
+                      <span>{q.queueDepth ?? rt.queueDepth ?? 0}</span>
+                    </StatusItem>
+                    <StatusItem label="Oldest Queued">
+                      <span>
+                        {q.oldestJobAgeMs != null ? `${Math.round(q.oldestJobAgeMs / 1000)}s` : '—'}
+                      </span>
+                    </StatusItem>
+                    <StatusItem label="Dropped / Coalesced">
+                      <span>{`${q.droppedJobs ?? 0} / ${q.coalescedJobs ?? 0}`}</span>
+                    </StatusItem>
+                    <StatusItem label="Failed Jobs">
+                      <span>{q.failedJobs ?? 0}</span>
+                    </StatusItem>
+                    <StatusItem label="Devices (on/deg/off)">
+                      <span>
+                        {sup.devices
+                          ? `${sup.devices.online ?? 0}/${sup.devices.degraded ?? 0}/${sup.devices.offline ?? 0}`
+                          : '—'}
+                        {sup.devices?.total != null ? ` · ${sup.devices.total} managed` : ''}
+                      </span>
+                    </StatusItem>
+                    <StatusItem label="Points (good/stale/fault)">
+                      <span>
+                        {sup.points
+                          ? `${sup.points.good ?? 0}/${sup.points.stale ?? 0}/${sup.points.faulted ?? 0}`
+                          : '—'}
+                        {sup.points?.total != null ? ` · ${sup.points.total} managed` : ''}
+                      </span>
+                    </StatusItem>
+                    <StatusItem label="Polling">
+                      <span>{sup.polling?.status || '—'}</span>
+                    </StatusItem>
+                    <StatusItem label="Health Checks">
+                      <span>{sup.health?.status || '—'}</span>
+                    </StatusItem>
+                    <StatusItem label="Recovery">
+                      <span>
+                        {rt.recovery?.inProgress ? 'recovering' : 'idle'}
+                        {` · attempt ${rt.recovery?.attempt ?? 0}`}
+                        {rt.recovery?.nextRetryAt
+                          ? ` · next ${formatTimeAgo(rt.recovery.nextRetryAt)}`
+                          : ''}
+                        {rt.recovery?.lastReason ? ` · ${rt.recovery.lastReason}` : ''}
+                      </span>
+                    </StatusItem>
+                    <StatusItem label="Process / Memory">
+                      <span>
+                        {rt.system?.processUptimeSec != null ? `${rt.system.processUptimeSec}s` : '—'}
+                        {rt.system?.memoryRss != null
+                          ? ` · ${Math.round(rt.system.memoryRss / 1024 / 1024)} MB RSS`
+                          : ''}
+                        {rt.system?.nodeVersion ? ` · ${rt.system.nodeVersion}` : ''}
+                      </span>
+                    </StatusItem>
+                    <StatusItem label="Last Error">
+                      <span className="text-danger" style={{ fontSize: '0.85rem' }}>
+                        {rt.lastError || mstp?.lastError || '—'}
+                      </span>
+                    </StatusItem>
+                  </div>
+                </>
+              );
+            })()}
             <div className="d-flex flex-wrap gap-2 mb-3">
               <ActionButton
                 size="sm"
@@ -594,14 +697,14 @@ export default function BacnetMstpPage() {
                   }
                 }}
               >
-                Start Runtime
+                Start
               </ActionButton>
               <ActionButton
                 size="sm"
                 disabled={loading || !interfaceOpen}
                 onClick={handleCloseMstp}
               >
-                Stop Runtime
+                Stop
               </ActionButton>
               <ActionButton
                 size="sm"
@@ -639,7 +742,14 @@ export default function BacnetMstpPage() {
                   }
                 }}
               >
-                Retry Now
+                Retry Recovery
+              </ActionButton>
+              <ActionButton
+                size="sm"
+                disabled={loading}
+                onClick={handleExportDiagnostics}
+              >
+                Export Diagnostics
               </ActionButton>
             </div>
             <div className="form-section-title">Status</div>

@@ -4,7 +4,8 @@ const crypto = require('crypto');
 
 /**
  * Atomically write text to a path using temp file + rename.
- * Creates a .bak sibling before overwriting an existing file.
+ * Optionally creates a single sibling .bak before overwriting (default on).
+ * High-churn writers may pass { backup: false }.
  */
 function atomicWriteFile(filePath, contents, { backup = true } = {}) {
   const dir = path.dirname(filePath);
@@ -12,6 +13,7 @@ function atomicWriteFile(filePath, contents, { backup = true } = {}) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
+  // Keep only one rotating .bak per file — overwritten on each backed write.
   if (backup && fs.existsSync(filePath)) {
     try {
       fs.copyFileSync(filePath, `${filePath}.bak`);

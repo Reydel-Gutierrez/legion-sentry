@@ -4,6 +4,13 @@ const bacnetIpService = require('../services/bacnet/bacnetIp.service');
 const bacnetMstpService = require('../services/bacnet/bacnetMstp.service');
 const deviceService = require('../services/devices');
 const mstpBusCoordinator = require('../services/execution/mstpBusCoordinator');
+const { buildDiagnosticsExport } = require('../services/system/diagnosticsExport');
+const fieldExecutionEngine = require('../services/execution/fieldExecutionEngine');
+const pointPollingEngine = require('../services/execution/pointPollingEngine');
+const deviceHealthPoller = require('../services/execution/deviceHealthPoller');
+const managedDevices = require('../services/devices/managedDevices');
+const pointsStore = require('../services/devices/managedPointsStore');
+const pointCache = require('../services/execution/pointCache');
 const logger = require('../services/logger');
 const {
   validateBacnetIpDiscoverBody,
@@ -77,11 +84,65 @@ router.get('/mstp/status', (_req, res) => {
 });
 
 router.get('/mstp/runtime', (_req, res) => {
+  const runtime = bacnetMstpService.getRuntimeSnapshot();
+  const queue = fieldExecutionEngine.getQueueSummary();
+  const polling = pointPollingEngine.getStatus();
+  const health = deviceHealthPoller.getStatus();
+  const devices = managedDevices.getManagedDevices().devices || [];
+  const deviceCounts = { total: devices.length, online: 0, degraded: 0, offline: 0 };
+  for (const d of devices) {
+    if (d.deviceQuality === 'online') deviceCounts.online += 1;
+    else if (d.deviceQuality === 'degraded') deviceCounts.degraded += 1;
+    else if (d.deviceQuality === 'offline') deviceCounts.offline += 1;
+  }
+  const points = pointsStore.loadPoints();
+  const deviceMap = new Map(devices.map((d) => [d.id, d]));
+  const pointCounts = { total: points.length, good: 0, stale: 0, faulted: 0 };
+  for (const point of points) {
+    const q = pointCache.derivePointQuality(point, deviceMap.get(point.managedDeviceId)?.deviceQuality);
+    if (q === 'online') pointCounts.good += 1;
+    else if (q === 'stale' || q === 'stale_by_device') pointCounts.stale += 1;
+    else if (q === 'fault' || q === 'error' || q === 'offline' || q === 'offline_by_device') pointCounts.faulted += 1;
+  }
+  const mem = process.memoryUsage();
   res.json({
     success: true,
-    data: bacnetMstpService.getRuntimeSnapshot(),
+    data: {
+      ...runtime,
+      queue,
+      supervision: {
+        devices: deviceCounts,
+        points: pointCounts,
+        polling: {
+          status: polling.mode,
+          running: polling.running,
+          paused: polling.paused,
+        },
+        health: {
+          status: health.mode || (health.running ? 'running' : 'stopped'),
+          running: health.running,
+          paused: health.paused,
+        },
+      },
+      system: {
+        processUptimeSec: Math.floor(process.uptime()),
+        memoryRss: mem.rss,
+        memoryHeapUsed: mem.heapUsed,
+        nodeVersion: process.version,
+      },
+    },
     requestId: _req.requestId,
   });
+});
+
+router.get('/mstp/diagnostics/export', (_req, res) => {
+  const report = buildDiagnosticsExport();
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="legion-sentry-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json"`,
+  );
+  res.json(report);
 });
 
 router.post('/mstp/runtime/start', asyncHandler(async (req, res) => {

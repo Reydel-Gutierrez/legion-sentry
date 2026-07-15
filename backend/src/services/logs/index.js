@@ -1,5 +1,6 @@
 const fs = require('fs');
 const { dataFilePath, ensureDataDir } = require('../../lib/dataPaths');
+const { rotateLogFile } = require('../../lib/fileRetention');
 
 function getLogsPath() {
   return dataFilePath('logs.jsonl');
@@ -7,6 +8,7 @@ function getLogsPath() {
 
 const LOG_LEVELS = ['info', 'warn', 'error', 'debug'];
 const SERVICES = ['system', 'network', 'bacnet', 'modbus', 'mqtt', 'fault', 'interfaces', 'auth'];
+const MEMORY_LOG_LIMIT = 500;
 
 let logs = [];
 let nextId = 1;
@@ -18,6 +20,7 @@ function ensureLogsFile() {
   if (!fs.existsSync(LOGS_PATH)) {
     fs.writeFileSync(LOGS_PATH, '', 'utf8');
   }
+  rotateLogFile(LOGS_PATH);
 }
 
 function loadLogsFromDisk() {
@@ -61,7 +64,8 @@ function addLog({ level = 'info', service = 'system', message }) {
   };
 
   logs.unshift(entry);
-  if (logs.length > 500) logs = logs.slice(0, 500);
+  if (logs.length > MEMORY_LOG_LIMIT) logs = logs.slice(0, MEMORY_LOG_LIMIT);
+  rotateLogFile(getLogsPath());
   appendLogToDisk(entry);
   return entry;
 }

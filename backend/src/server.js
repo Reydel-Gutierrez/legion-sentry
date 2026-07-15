@@ -18,7 +18,7 @@ let shuttingDown = false;
 
 async function startApplication() {
   ensureDataDir();
-  writeRuntimeMarker(resolveDataDir(), { phase: 2, nodeEnv: NODE_ENV });
+  writeRuntimeMarker(resolveDataDir(), { phase: '2.5', nodeEnv: NODE_ENV });
 
   authService.loadAuthConfig();
   logsService.seedStartupLog();
@@ -94,11 +94,19 @@ async function gracefulShutdown(signal) {
   forceTimer.unref?.();
 
   try {
+    bacnetMstpService.lifecycle?.setShuttingDown?.(true);
     pointPollingEngine.stop();
     deviceHealthPoller.stop();
     fieldExecutionEngine.cancelQueuedBackgroundJobs('shutdown');
     await fieldExecutionEngine.waitForIdleOrCancel(5000);
     fieldExecutionEngine.stopWorker();
+    try {
+      // eslint-disable-next-line global-require
+      const serialService = require('./services/interfaces/serial.service');
+      await serialService.stopSerialMonitor();
+    } catch {
+      // optional
+    }
     await bacnetMstpService.stopRuntime('process_shutdown');
   } catch (err) {
     console.error('[system] Shutdown runtime cleanup error:', err.message);

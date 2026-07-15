@@ -27,7 +27,8 @@ function loadJobs() {
 
 function saveJobs(jobs) {
   ensureJobsFile();
-  atomicWriteJson(getJobsPath(), jobs, { backup: true });
+  // High-churn job file — skip .bak on every write; primary file stays atomic.
+  atomicWriteJson(getJobsPath(), jobs, { backup: false });
 }
 
 let idCounter = 0;

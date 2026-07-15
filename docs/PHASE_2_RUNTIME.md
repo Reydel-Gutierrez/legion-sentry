@@ -56,7 +56,7 @@ Serial faults enter `recovering` with backoff `1s, 2s, 5s, 10s, 30s, 60s` (+ jit
 
 ## Startup / shutdown
 
-`server.js` starts HTTP → (optional auto) MS/TP runtime → pollers. On SIGTERM/SIGINT: stop pollers, cancel background jobs, bounded wait, close serial, close HTTP. Compatible with `systemctl restart legion-sentry` (`TimeoutStopSec=25`).
+`server.js` starts HTTP → (optional auto) MS/TP runtime → pollers. On SIGTERM/SIGINT: stop pollers, cancel background jobs, bounded wait, destroy token engine, close serial, close HTTP. Compatible with `systemctl restart legion-sentry` (`TimeoutStopSec=30`).
 
 ## Data directory
 
@@ -66,16 +66,28 @@ See [DATA_MIGRATION.md](./DATA_MIGRATION.md). Production uses `/var/lib/legion-s
 
 - `GET /api/bacnet/mstp/runtime`
 - `POST /api/bacnet/mstp/runtime/start|stop|restart|retry`
+- `GET /api/bacnet/mstp/diagnostics/export`
 - `GET /api/devices/managed/:id/health`
 - `POST /api/devices/managed/:id/read-all-managed`
 
-## Phase 2 limitations
+## Phase 2 → Phase 2.5
+
+Phase 2 introduced the supervisor scaffolding. **Phase 2.5** completes it:
+
+- Persistent token engine (no longer operation-scoped)
+- Backend serial ownership registry (`none` / `bacnet-mstp` / `diagnostics`)
+- Bounded queue with coalesce + expired poll discard
+- Runtime dashboard + redacted diagnostics export
+- Log / job / backup retention
+
+See **[PHASE_2_5_RUNTIME_COMPLETION.md](./PHASE_2_5_RUNTIME_COMPLETION.md)**.
+
+## Limitations (still before Phase 3)
 
 - Not a BACnet/IP ↔ MS/TP router (Phase 3)
 - No BBMD / Foreign Device / router advertisements
 - COV unsupported on current MS/TP path
 - Physical WriteProperty blocked by default
-- Token engine is still operation-scoped (port stays open)
 
 ## Hardware acceptance
 

@@ -39,26 +39,27 @@ Tests mock BACnet/serial hardware and run on a development PC (Node ≥ 16).
 
 ## Runtime architecture
 
-See **[docs/RUNTIME_ARCHITECTURE.md](docs/RUNTIME_ARCHITECTURE.md)** and **[docs/PHASE_2_RUNTIME.md](docs/PHASE_2_RUNTIME.md)** for:
+See **[docs/RUNTIME_ARCHITECTURE.md](docs/RUNTIME_ARCHITECTURE.md)**, **[docs/PHASE_2_RUNTIME.md](docs/PHASE_2_RUNTIME.md)**, and **[docs/PHASE_2_5_RUNTIME_COMPLETION.md](docs/PHASE_2_5_RUNTIME_COMPLETION.md)** for:
 
-- Service ownership and BACnet/IP vs MS/TP boundaries
-- Persistent MS/TP runtime state machine and generation
-- Single MS/TP serial ownership (`bacnetMstp.service`)
-- Operation queue priorities (discovery / point discovery / heartbeat / polling)
+- Persistent MS/TP runtime + **one token engine per generation**
+- Authoritative state machine and runtime generation protection
+- Backend serial ownership (`none` / `bacnet-mstp` / `diagnostics`)
+- Bounded operation queue (coalesce, expire, priorities)
 - Point quality, device health, recovery, and graceful shutdown
+- Runtime dashboard + redacted diagnostics export
 
-### Phase 2 limitations
+### Phase 2.5 limitations (before Phase 3)
 
 - Not a BACnet/IP ↔ MS/TP router (Phase 3)
 - Writes (`write_property`) disabled by default (`WRITE_NOT_IMPLEMENTED`)
-- SubscribeCOV not safely supported on the current MS/TP path
-- Directed MS/TP Who-Is (unicast) is not fully supported without full token participation modes
-- Diagnostics serial monitor and BACnet MS/TP remain mutually exclusive on the same port
+- SubscribeCOV not supported on the current MS/TP path
+- Directed MS/TP Who-Is (unicast) is not fully supported
+- Diagnostics serial monitor and BACnet MS/TP remain mutually exclusive (enforced in the backend)
 - Hardware acceptance tests A–H must be run on Raspberry Pi + RS-485 (see `docs/HARDWARE_ACCEPTANCE_PHASE_2.md`)
 
 ### MS/TP serial ownership
 
-Only `backend/src/services/bacnet/bacnetMstp.service.js` opens the BACnet RS-485 `SerialPort`. Express routes submit work through that runtime (or the diagnostics `serial.service` monitor, which must not run at the same time).
+Only `bacnetMstp.service` opens the BACnet RS-485 `SerialPort`, after acquiring `bacnet-mstp` ownership. Diagnostics acquires `diagnostics`. Conflicts return HTTP 409.
 
 ### Reproducing point discovery
 
@@ -127,7 +128,7 @@ Frontend: `http://<pi-ip>:5173` · API: `http://<pi-ip>:3001`
 - Default RS485 port on Pi: `/dev/serial0`
 - Serial console must be disabled for RS485 HAT use
 - Production data: `/var/lib/legion-sentry` (see [docs/DATA_MIGRATION.md](docs/DATA_MIGRATION.md))
-- Runtime docs: [docs/PHASE_2_RUNTIME.md](docs/PHASE_2_RUNTIME.md)
+- Runtime docs: [docs/PHASE_2_5_RUNTIME_COMPLETION.md](docs/PHASE_2_5_RUNTIME_COMPLETION.md)
 - On first boot, default login is created automatically (see Authentication)
 
 ## Authentication
